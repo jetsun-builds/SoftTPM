@@ -39,6 +39,8 @@ add_executable(SoftTpmService WIN32
     src/platform/platform_run.c
     src/platform/platform_misc.c
     src/platform/platform_pcr.c
+    src/platform/platform_log.c
+    src/platform/platform_wbcl.c
     src/platform/platform_act.c
     src/provision/tpm_commands.c
     src/provision/ek_certificate.c

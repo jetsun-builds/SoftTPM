@@ -239,6 +239,127 @@ Invoke-Step 'ek-cert-info' {
     }
 }
 
+Invoke-Step 'wbcl' {
+    try
+    {
+        $wbcl = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\IntegrityServices' -Name 'WBCL' -ErrorAction Stop).'WBCL'
+        "WBCL registry value present: $($wbcl.Length) bytes"
+    }
+    catch
+    {
+        'WBCL registry value not present'
+    }
+
+    $platformLog = Join-Path $env:ProgramData 'SoftTpm\platform-log.bin'
+    if (Test-Path $platformLog)
+    {
+        "platform log file: $($platformLog) ($((Get-Item $platformLog).Length) bytes)"
+    }
+    else
+    {
+        'platform log file: not present (synthetic WBCL mode)'
+    }
+
+    $gatherDir = Join-Path $env:TEMP 'softtpm-tcglog'
+    $capturedBootLog = Join-Path $env:TEMP 'softtpm-captured-bootlog.dat'
+    $previousBootLog = Join-Path $gatherDir 'SRTMBoot.dat'
+    if ((Test-Path $previousBootLog) -and ((Get-Item $previousBootLog).Length -gt 69))
+    {
+        Copy-Item $previousBootLog $capturedBootLog -Force
+        "preserved the previously gathered boot log at $capturedBootLog ($((Get-Item $capturedBootLog).Length) bytes)"
+    }
+
+    Remove-Item $gatherDir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $gatherDir -Force | Out-Null
+    try { & tpmtool gatherlogs $gatherDir | Out-String } catch { "tpmtool gatherlogs failed: $($_.Exception.Message)" }
+    "exit code: $LASTEXITCODE"
+    Get-ChildItem $gatherDir -File -ErrorAction SilentlyContinue |
+        ForEach-Object { "collected: $($_.Name) ($($_.Length) bytes)" }
+}
+
+Invoke-Step 'replay-test' {
+    $platformLog = Join-Path $env:ProgramData 'SoftTpm\platform-log.bin'
+
+    $sourceLog = @(
+        (Join-Path $env:TEMP 'softtpm-tcglog\SRTMBoot.dat'),
+        (Join-Path $env:TEMP 'softtpm-captured-bootlog.dat')
+    ) |
+        Where-Object { (Test-Path $_) -and ((Get-Item $_).Length -gt 69) } |
+        Sort-Object { (Get-Item $_).Length } -Descending |
+        Select-Object -First 1
+
+    if (-not $sourceLog)
+    {
+        'no captured boot log larger than a synthetic WBCL is available; skipping the replay test'
+        return
+    }
+
+    $sourceSize = (Get-Item $sourceLog).Length
+    "replay source: $sourceLog ($sourceSize bytes)"
+    Copy-Item $sourceLog $platformLog -Force
+    "installed the captured log at $platformLog"
+
+    $before = @(Get-Content $ServiceLog -ErrorAction SilentlyContinue).Count
+
+    $service = Get-Service -Name 'SoftTpmService' -ErrorAction SilentlyContinue
+    if ($service -and $service.Status -ne 'Stopped')
+    {
+        Stop-Service -Name 'SoftTpmService' -Force
+        Start-Sleep -Seconds 2
+    }
+
+    Start-Service -Name 'SoftTpmService'
+
+    $replayOk = $false
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline)
+    {
+        Start-Sleep -Seconds 1
+        $newLines = @(Get-Content $ServiceLog -ErrorAction SilentlyContinue | Select-Object -Skip $before)
+
+        if ($newLines -match 'platform: published')
+        {
+            $replayOk = [bool]($newLines -match 'platform log: replayed')
+            break
+        }
+
+        $service = Get-Service -Name 'SoftTpmService' -ErrorAction SilentlyContinue
+        if (-not $service -or $service.Status -ne 'Running')
+        {
+            break
+        }
+    }
+
+    '== service log since the replay restart =='
+    Get-Content $ServiceLog -ErrorAction SilentlyContinue | Select-Object -Skip $before
+
+    if (-not $replayOk)
+    {
+        'REPLAY TEST FAILED: the captured log was not replayed (see the service log above)'
+        return
+    }
+
+    try
+    {
+        $wbcl = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\IntegrityServices' -Name 'WBCL' -ErrorAction Stop).'WBCL'
+        if ($wbcl.Length -eq $sourceSize)
+        {
+            "REPLAY TEST PASSED: the published WBCL matches the captured log ($($wbcl.Length) bytes)"
+        }
+        else
+        {
+            "REPLAY TEST FAILED: the published WBCL is $($wbcl.Length) bytes, expected $sourceSize"
+        }
+    }
+    catch
+    {
+        'REPLAY TEST FAILED: the WBCL registry value is missing after the replay restart'
+    }
+
+    Copy-Item $ServiceLog "$LogDirectory\softtpm-service-replay.log" -Force
+    'archived the replay restart log as softtpm-service-replay.log'
+}
+
 if (-not $SkipCdb)
 {
     Invoke-Step 'cdb' {

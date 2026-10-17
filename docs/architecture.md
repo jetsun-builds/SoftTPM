@@ -36,7 +36,7 @@ persistent state.
 | --- | --- |
 | `driver/` | KMDF driver. Creates the two control devices above, owns the priority queue, the 30-second timeout timer and the trace ring. Implements the `tpm.sys`-compatible IOCTL surface. |
 | `service/src/engine.c` | Links the reference TPM core (`Tpm_CoreLib`, built from `ms-tpm-20-ref`) and drives its lifecycle: load state, manufacture if needed, power on, `TPM2_Startup`, command execution, shutdown. |
-| `service/src/platform/` | The reference implementation's platform interface (`_plat__*`): NV memory backed by the state store, time, PCR store, ACT store, entropy from CNG, physical-presence signals, cancellation. |
+| `service/src/platform/` | The reference implementation's platform interface (`_plat__*`): NV memory backed by the state store, time, PCR store, ACT store, entropy from CNG, physical-presence signals, cancellation, and the Windows platform log: it loads and validates a captured TCG event log, replays it into the PCRs, and publishes it (or a synthetic spec ID log) as the WBCL for readiness checks. |
 | `service/src/provision/` | Creates the EK and SRK (RSA 2048), persists them to the standard handles, and writes an EK certificate to the standard NV index. |
 | `service/src/storage/` | Encrypted state persistence: `state.key` (DPAPI machine scope) and `tpm.state` (AES-256-GCM), atomic replace. |
 | `service/src/driver_client.c` | The service side of the driver protocol: opens the control device, serves commands until stopped, reconnects if the driver goes away, dumps the driver trace ring when a response is rejected. |
@@ -59,10 +59,16 @@ persistent state.
 4. `engine_start`: opens the state store, enables NV memory (loading
    `tpm.state`, manufacturing the TPM on first run), initializes ACTs, signals
    power-on and reset, then runs `TPM2_Startup(CLEAR)`.
-5. `provision_run`: if the EK/SRK/EK certificate are not present yet, they are
+5. `platform_log_load_and_replay`: if a captured platform TCG log is present
+   (`platform-log.bin` in the state directory or `--platform-log=PATH`), it is
+   validated and every measurement event is replayed into the PCRs with
+   internal `TPM2_PCR_Extend` commands.
+6. `provision_run`: if the EK/SRK/EK certificate are not present yet, they are
    created and persisted (idempotent; wrapped in a physical-presence window
-   for the platform-authorized operations).
-6. The service serves commands in a loop (see below) until asked to stop. On
+   for the platform-authorized operations), then `platform_wbcl_publish`
+   publishes the platform log (or the synthetic spec ID log) as the WBCL
+   registry value.
+7. The service serves commands in a loop (see below) until asked to stop. On
    stop it runs `TPM2_Shutdown(CLEAR)`, signals power-off and exits.
 
 ## TPM command path

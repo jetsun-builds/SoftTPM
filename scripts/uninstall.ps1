@@ -79,6 +79,13 @@ else
     Write-Host 'The SoftTPM service is not registered.'
 }
 
+$wbclKeyPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\IntegrityServices'
+if (Get-ItemProperty -Path $wbclKeyPath -Name 'WBCL' -ErrorAction SilentlyContinue)
+{
+    Write-Host 'Removing the synthetic SoftTPM platform log (WBCL)'
+    Remove-ItemProperty -Path $wbclKeyPath -Name 'WBCL' -Force -ErrorAction SilentlyContinue
+}
+
 $serviceInstallDir = Join-Path $env:ProgramFiles 'SoftTpm'
 if (Test-Path $serviceInstallDir)
 {

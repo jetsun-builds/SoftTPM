@@ -6,6 +6,7 @@
 #define SOFTTPM_TPM_STARTUP 0x00000144
 #define SOFTTPM_TPM_SHUTDOWN 0x00000145
 #define SOFTTPM_TPM_CREATE_PRIMARY 0x00000131
+#define SOFTTPM_TPM_PCR_EXTEND 0x00000182
 #define SOFTTPM_TPM_EVICT_CONTROL 0x00000120
 #define SOFTTPM_TPM_NV_DEFINE_SPACE 0x0000012A
 #define SOFTTPM_TPM_NV_WRITE 0x00000137
@@ -72,6 +73,13 @@ uint32_t tpm_build_create_primary(
     uint32_t PrimaryHandle,
     const uint8_t* PublicArea,
     uint32_t PublicAreaSize,
+    uint8_t* Buffer,
+    uint32_t BufferSize);
+
+uint32_t tpm_build_pcr_extend(
+    uint32_t PcrHandle,
+    const uint8_t* DigestValues,
+    uint32_t DigestValuesSize,
     uint8_t* Buffer,
     uint32_t BufferSize);
 

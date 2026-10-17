@@ -4,6 +4,8 @@
 #include "driver_client.h"
 #include "engine.h"
 #include "log.h"
+#include "platform/platform_wbcl.h"
+#include "platform/platform_log.h"
 #include "provision/provision.h"
 
 static SOFTTPM_OPTIONS* s_options = NULL;
@@ -104,9 +106,16 @@ static void WINAPI SoftTpmServiceMain(DWORD Argc, LPWSTR* Argv)
         return;
     }
 
+    platform_log_load_and_replay(s_options->PlatformLogPath);
+
     if (provision_run(s_options->StateDirectory) != 0)
     {
         log_warn("service: provisioning incomplete, continuing with limited functionality");
+    }
+
+    if (s_options->PublishWbcl)
+    {
+        platform_wbcl_publish();
     }
 
     SoftTpmReportStatus(SERVICE_RUNNING, NO_ERROR, 0);

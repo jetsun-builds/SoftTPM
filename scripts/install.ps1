@@ -117,11 +117,6 @@ $driverPackage = Join-Path $softTpmRoot "driver\x64\$Configuration\SoftTpmDriver
 $driverInf = Join-Path $driverPackage 'SoftTpmDriver.inf'
 $serviceExe = Join-Path $softTpmRoot "build\service\$Configuration\SoftTpmService.exe"
 
-if (-not (Test-Path $driverInf))
-{
-    throw "The driver package was not found at $driverInf. Run build.ps1 first (the packaged INF must sit next to its catalog and driver binary)."
-}
-
 $softTpmDevice = @(Get-PnpDevice -PresentOnly -FriendlyName '*SoftTPM*' -ErrorAction SilentlyContinue)
 $hardwareTpm = @(Get-PnpDevice -PresentOnly -FriendlyName '*Trusted Platform Module*' -ErrorAction SilentlyContinue)
 
@@ -157,6 +152,11 @@ if ((Test-TpmPresent) -and ($softTpmDevice.Count -eq 0))
 
 if (-not $SkipDriverInstall)
 {
+    if (-not (Test-Path $driverInf))
+    {
+        throw "The driver package was not found at $driverInf. Run build.ps1 first (the packaged INF must sit next to its catalog and driver binary)."
+    }
+
     if (Get-Service -Name 'SoftTpmService' -ErrorAction SilentlyContinue)
     {
         Write-Host 'Stopping the previous SoftTpmService'

@@ -7,6 +7,8 @@
 #include "driver_client.h"
 #include "engine.h"
 #include "log.h"
+#include "platform/platform_wbcl.h"
+#include "platform/platform_log.h"
 #include "provision/provision.h"
 
 static HANDLE s_consoleStopEvent = NULL;
@@ -76,9 +78,16 @@ static int SoftTpmRunConsole(const SOFTTPM_OPTIONS* Options)
         goto cleanup;
     }
 
+    platform_log_load_and_replay(Options->PlatformLogPath);
+
     if (provision_run(Options->StateDirectory) != 0)
     {
         log_warn("console: provisioning incomplete, continuing with limited functionality");
+    }
+
+    if (Options->PublishWbcl)
+    {
+        platform_wbcl_publish();
     }
 
     driver_client_run(Options, s_consoleStopEvent);

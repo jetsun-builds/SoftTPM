@@ -55,11 +55,13 @@ SoftTPM is built and validated on Windows 11 x64 with the test-signed driver:
   self-issued EK certificate in the Windows `EKCertStore`.
 - TPM state survives service restarts and machine reboots.
 
-Known limits: `Ready For Attestation` stays false because there is no firmware
-TCG event log, and BitLocker's OS-drive wizard refuses to start for the same
-reason ("No TCG event is available"). A software TPM cannot unseal before the
-OS boots, so OS-drive BitLocker with a TPM protector is out of scope. The full
-list is in [docs/attestation-and-limits.md](docs/attestation-and-limits.md).
+The service publishes a TCG platform log (WBCL) so Windows platform log checks
+(`Tbsi_Get_TCG_Log`, `INFORMATION_TCG_EVENT_LOG`) find a log: by default a
+synthetic log with only the spec ID event, or a captured firmware log that the
+service validates and replays into the PCRs at startup
+(`scripts\capture-platform-log.ps1`). A software TPM cannot unseal before the
+OS boots, so automatic OS-drive BitLocker unlock remains out of scope. The
+full list is in [docs/attestation-and-limits.md](docs/attestation-and-limits.md).
 
 ## Feature support
 
@@ -73,10 +75,10 @@ list is in [docs/attestation-and-limits.md](docs/attestation-and-limits.md).
 | TPM state persistence across service restarts and reboots | Works |
 | BitLocker data volume with a TPM protector (runtime seal/unseal) | Untested; expected to work while Windows is running |
 | Windows Hello enrollment | Untested; expected to work through the same PCP path |
-| BitLocker setup on the OS drive | Fails: the wizard refuses with "No TCG event is available" |
+| BitLocker setup on the OS drive | The wizard's TCG-log check now finds a log (synthetic WBCL or a replayed platform log); automatic pre-boot unlock remains unsupported |
 | BitLocker automatic pre-boot unlock | Not supported: the UEFI boot path cannot reach a software TPM, so a recovery prompt appears |
-| `Ready For Attestation` / remote attestation | Not supported: no firmware TCG event log, and the EK chain is not Microsoft-trusted |
-| Firmware measurement PCRs / measured boot | Not supported: PCRs are software-implemented |
+| `Ready For Attestation` / remote attestation | The TCG log bit is satisfied by the published WBCL (synthetic or replayed); attestation with external verifiers still fails because the EK chain is not Microsoft-trusted |
+| Firmware measurement PCRs / measured boot | Optional: a captured platform log is replayed into the PCRs and published as the WBCL; the values are still produced by the service, not by the boot firmware |
 | Attestation-only IOCTLs (`Tbsi_Create_Windows_Key`, revoke flows) | Not implemented |
 | Locality != 0 policies, physical-presence flows, field upgrade | Not supported |
 
@@ -141,6 +143,11 @@ collects logs under `logs/`:
 For protocol-level debugging, `.\scripts\trace.ps1` dumps service and device
 state, the driver trace ring, and exercises the TPM device directly (bypassing
 TBS).
+
+To give SoftTPM a real platform log, capture one while the firmware TPM is
+active (`.\scripts\capture-platform-log.ps1`) and place it at
+`%ProgramData%\SoftTpm\platform-log.bin`; the service replays it into the PCRs
+and publishes it as the WBCL on the next start.
 
 ## Uninstall and reset
 

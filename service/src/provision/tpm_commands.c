@@ -242,6 +242,25 @@ uint32_t tpm_build_create_primary(
     return writer.Overflow ? 0 : writer.Offset;
 }
 
+uint32_t tpm_build_pcr_extend(
+    uint32_t PcrHandle,
+    const uint8_t* DigestValues,
+    uint32_t DigestValuesSize,
+    uint8_t* Buffer,
+    uint32_t BufferSize)
+{
+    TPM_WRITER writer;
+
+    WriterInit(&writer, Buffer, BufferSize);
+    WriterCommandHeader(&writer, SOFTTPM_TPM_ST_SESSIONS, SOFTTPM_TPM_PCR_EXTEND);
+    WriterU32(&writer, PcrHandle);
+    WriterPasswordAuthArea(&writer);
+    WriterBytes(&writer, DigestValues, DigestValuesSize);
+    WriterCompleteHeader(&writer);
+
+    return writer.Overflow ? 0 : writer.Offset;
+}
+
 uint32_t tpm_build_evict_control(
     uint32_t AuthHandle,
     uint32_t ObjectHandle,

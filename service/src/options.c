@@ -6,6 +6,7 @@
 
 #define SOFTTPM_DEFAULT_DIR_NAME L"SoftTpm"
 #define SOFTTPM_LOG_FILE_NAME L"softtpm.log"
+#define SOFTTPM_PLATFORM_LOG_FILE_NAME L"platform-log.bin"
 
 static void SoftTpmCopyString(wchar_t* Destination, size_t DestinationCount, const wchar_t* Source)
 {
@@ -68,6 +69,7 @@ void options_set_defaults(SOFTTPM_OPTIONS* Options)
     memset(Options, 0, sizeof(*Options));
 
     Options->Console = 0;
+    Options->PublishWbcl = 1;
     Options->LogLevel = SOFTTPM_LOG_INFO;
 
     length = GetEnvironmentVariableW(L"ProgramData", programData, SOFTTPM_STATE_MAX_PATH);
@@ -87,6 +89,12 @@ void options_set_defaults(SOFTTPM_OPTIONS* Options)
         SOFTTPM_STATE_MAX_PATH,
         Options->StateDirectory,
         SOFTTPM_LOG_FILE_NAME);
+
+    SoftTpmJoinPath(
+        Options->PlatformLogPath,
+        SOFTTPM_STATE_MAX_PATH,
+        Options->StateDirectory,
+        SOFTTPM_PLATFORM_LOG_FILE_NAME);
 }
 
 int options_parse(SOFTTPM_OPTIONS* Options, int argc, wchar_t** argv)
@@ -101,11 +109,23 @@ int options_parse(SOFTTPM_OPTIONS* Options, int argc, wchar_t** argv)
         {
             Options->Console = 1;
         }
+        else if (_wcsicmp(arg, L"--publish-wbcl") == 0)
+        {
+            Options->PublishWbcl = 1;
+        }
+        else if (_wcsicmp(arg, L"--no-publish-wbcl") == 0)
+        {
+            Options->PublishWbcl = 0;
+        }
         else if (_wcsicmp(arg, L"--help") == 0 || _wcsicmp(arg, L"-h") == 0 || _wcsicmp(arg, L"/?") == 0)
         {
             wprintf(L"SoftTpmService - software TPM 2.0 for Windows\n\n");
             wprintf(L"Usage: SoftTpmService.exe [options]\n\n");
             wprintf(L"  --console            run in the foreground instead of as a service\n");
+            wprintf(L"  --publish-wbcl       publish a synthetic platform TCG log (default)\n");
+            wprintf(L"  --no-publish-wbcl    leave the platform TCG log registry value alone\n");
+            wprintf(L"  --platform-log=PATH  TCG event log to replay into the PCRs (default:\n");
+            wprintf(L"                       %%ProgramData%%\\SoftTpm\\platform-log.bin)\n");
             wprintf(L"  --log-level=LEVEL    debug, info, warn, error or none\n");
             wprintf(L"  --state-dir=PATH     directory holding TPM state (default: %%ProgramData%%\\SoftTpm)\n");
             wprintf(L"  --help               show this help\n");
@@ -118,6 +138,22 @@ int options_parse(SOFTTPM_OPTIONS* Options, int argc, wchar_t** argv)
                 wprintf(L"Invalid log level: %ls\n", arg + 12);
                 return -1;
             }
+        }
+        else if (_wcsnicmp(arg, L"--platform-log=", 15) == 0)
+        {
+            if (arg[15] == L'\0')
+            {
+                wprintf(L"Empty platform log path\n");
+                return -1;
+            }
+
+            if ((size_t)wcslen(arg + 15) >= SOFTTPM_STATE_MAX_PATH)
+            {
+                wprintf(L"Platform log path is too long\n");
+                return -1;
+            }
+
+            SoftTpmCopyString(Options->PlatformLogPath, SOFTTPM_STATE_MAX_PATH, arg + 15);
         }
         else if (_wcsnicmp(arg, L"--state-dir=", 12) == 0)
         {
@@ -139,6 +175,11 @@ int options_parse(SOFTTPM_OPTIONS* Options, int argc, wchar_t** argv)
                 SOFTTPM_STATE_MAX_PATH,
                 Options->StateDirectory,
                 SOFTTPM_LOG_FILE_NAME);
+            SoftTpmJoinPath(
+                Options->PlatformLogPath,
+                SOFTTPM_STATE_MAX_PATH,
+                Options->StateDirectory,
+                SOFTTPM_PLATFORM_LOG_FILE_NAME);
         }
         else if (arg[0] == L'-')
         {
