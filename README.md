@@ -93,8 +93,7 @@ list is in [docs/attestation-and-limits.md](docs/attestation-and-limits.md).
   `--recurse-submodules` or run `git submodule update --init` once (the build
   vendors a private copy of it).
 
-- Test signing enabled (Secure Boot off) to run the self-signed driver, or a
-  driver signed through the Microsoft attestation signing program.
+- Test signing enabled (Secure Boot off) to run the self-signed driver
 
 ## Build
 
