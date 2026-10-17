@@ -89,10 +89,7 @@ list is in [docs/attestation-and-limits.md](docs/attestation-and-limits.md).
   and EK certificate generation. 1.1.1 or 3.x; the build script detects both
   installation layouts.
 - Microsoft's `ms-tpm-20-ref` at `..\ms-tpm-20-ref` relative to the `softtpm`
-  directory. The repository ships it as a git submodule, so clone with
-  `--recurse-submodules` or run `git submodule update --init` once (the build
-  vendors a private copy of it).
-
+  directory.
 - Test signing enabled (Secure Boot off) to run the self-signed driver
 
 ## Build
