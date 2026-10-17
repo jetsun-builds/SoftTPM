@@ -1,5 +1,8 @@
 # SoftTPM
 
+<img width="3810" height="1790" alt="image" src="https://github.com/user-attachments/assets/c0ec8faf-5915-4c43-bcac-725e304a2a8c" />
+
+
 SoftTPM is an open-source software TPM 2.0 for Windows. It presents a TPM 2.0
 to the Windows TPM stack without TPM hardware: `tbs.sys` binds to it, and
 every API built on TBS (`Win32_Tpm`, `tpm.msc`, `tpmtool`, the Microsoft
