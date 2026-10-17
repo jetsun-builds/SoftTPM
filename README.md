@@ -172,17 +172,6 @@ any BitLocker volume sealed to this TPM requires its recovery key afterwards.
 | [docs/service-protocol.md](docs/service-protocol.md) | Driver to service protocol, timeouts, recovery |
 | [docs/attestation-and-limits.md](docs/attestation-and-limits.md) | EK provisioning, trust model, limitations |
 
-## Contributing code
-
-1. Fork the repository and clone it with submodules
-   (`git clone --recurse-submodules <your-fork>`).
-2. Build with `.\scripts\build.ps1` and test on a Windows VM with test
-   signing enabled; run `.\scripts\run-provision-test.ps1` and
-   `SoftTpmStatus` before and after your change.
-3. Keep changes focused, match the existing style, and update the docs when
-   behavior changes.
-4. Open a pull request describing what you changed and how you tested it.
-   Include logs or trace output for driver/service fixes if you can.
 
 ## Legal
 
