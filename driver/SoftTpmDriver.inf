@@ -1,0 +1,56 @@
+; SoftTpmDriver.inf
+;
+; Installs the SoftTPM KMDF driver on a root-enumerated device.
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = SecurityDevices
+ClassGuid   = {d94ee5d8-d189-4994-83d2-f68d7d41b0e6}
+Provider    = %ProviderName%
+CatalogFile = SoftTpmDriver.cat
+DriverVer   = 10/16/2026,1.0.0.0
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+SoftTpmDriver.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = SoftTpm,NTamd64
+
+[SoftTpm.NTamd64]
+%SoftTpm.DeviceDesc% = SoftTpm_Device, Root\SoftTpm
+
+[SoftTpm_Device.NT]
+CopyFiles = SoftTpm_Drivers
+
+[SoftTpm_Device.NT.Services]
+AddService = SoftTpmDriver, 0x00000002, SoftTpm_Service
+
+[SoftTpm_Device.NT.Wdf]
+KmdfService = SoftTpmDriver, SoftTpm_WdfSection
+
+[SoftTpm_Drivers]
+SoftTpmDriver.sys
+
+[SoftTpm_Service]
+DisplayName    = %ServiceDesc%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\SoftTpmDriver.sys
+
+[SoftTpm_WdfSection]
+KmdfLibraryVersion = 1.15
+
+[Strings]
+ProviderName     = "SoftTPM Project"
+ManufacturerName = "SoftTPM Project"
+DiskName         = "SoftTPM Driver Installation Disk"
+SoftTpm.DeviceDesc = "SoftTPM Software TPM 2.0"
+ServiceDesc      = "SoftTPM Driver"
