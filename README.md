@@ -1,7 +1,13 @@
 # SoftTPM
 
-<img width="3810" height="1790" alt="image" src="https://github.com/user-attachments/assets/c0ec8faf-5915-4c43-bcac-725e304a2a8c" />
+<img width="3040" height="1554" alt="Screenshot 2026-10-17 222147" src="https://github.com/user-attachments/assets/149ee706-9631-40c8-823e-9c93ef399a36" />
 
+> **⚠️ Disclaimer & Warning:** 
+> This is a hobby project. I use AI tools to help me push progress on it, so please expect rough edges and verify anything you depend on. 
+> 
+> **I am NOT responsible for any system crashes or data loss.** Please do **not** install this driver on your primary Windows device (for testing purposes only!).
+> 
+> Contributions are always welcome! Feel free to open issues, send pull requests, report bugs, suggest ideas, or improve the docs.
 
 SoftTPM is an open-source software TPM 2.0 for Windows. It presents a TPM 2.0
 to the Windows TPM stack without TPM hardware: `tbs.sys` binds to it, and
@@ -19,12 +25,6 @@ It consists of two components:
   reference implementation (`ms-tpm-20-ref`), persists TPM state across
   reboots, and provisions the Endorsement Key (EK), Storage Root Key (SRK)
   and EK certificate that Windows expects to find on a real TPM.
-
-> **Note:** This is a hobby project. I use AI tools to help me push progress
-> on it. Expect rough edges, and verify anything you depend on.
->
-> Everyone is welcome to contribute: open issues, send pull requests, report
-> bugs, suggest ideas, or improve the docs.
 
 ## How it works
 
