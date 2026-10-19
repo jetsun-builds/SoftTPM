@@ -148,12 +148,8 @@ SoftTPM builds on, and was informed by, these projects:
 
 - Microsoft [`ms-tpm-20-ref`](https://github.com/microsoft/ms-tpm-20-ref) -
   the TPM 2.0 reference implementation hosted by the service.
-- Intel [`vtpm-td`](https://github.com/intel/vtpm-td) (in the project root as
-  `vtpm-td/`) - vTPM-in-TD architecture, command servicing and attestation
+- Intel [`vtpm-td`](https://github.com/intel/vtpm-td) - vTPM-in-TD architecture, command servicing and attestation
   flow.
-- [`vTPM-attestation`](https://github.com/hecmay/vTPM-attestation) - read-only
-  reference for UEFI attestation, event-log and PCR ideas. Not vendored and no
-  top-level license, so do not copy code from it.
 - Microsoft [`TSS.MSR`](https://github.com/microsoft/TSS.MSR) - TPM 2.0
   software stack used as a protocol reference.
 - [`tpm2-tss`](https://github.com/tpm2-software/tpm2-tss) and
