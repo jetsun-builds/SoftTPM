@@ -1,6 +1,7 @@
 # SoftTPM
 
-<img width="3040" height="1554" alt="SoftTPM on Windows" src="https://github.com/user-attachments/assets/149ee706-9631-40c8-823e-9c93ef399a36" />
+<img width="3040" height="1554" alt="" src="https://github.com/user-attachments/assets/aa9c3e63-4492-400a-9515-c3f00864cc08" />
+
 
 > **A quick heads-up:** This is a hobby project, and I've leaned on AI tools
 > quite a bit while building it. It works, but expect some rough edges—please
