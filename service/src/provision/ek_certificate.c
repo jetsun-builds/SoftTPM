@@ -21,6 +21,7 @@
 #define SOFTTPM_CA_VALIDITY_SECONDS (10 * 365 * 24 * 60 * 60)
 #define SOFTTPM_CA_COMMON_NAME "SoftTPM Local CA"
 #define SOFTTPM_EK_COMMON_NAME "SoftTPM Endorsement Key"
+#define SOFTTPM_ORGANIZATION "SoftTPM Project"
 #define SOFTTPM_RSA_EXPONENT 65537
 
 static void SoftTpmLogSslError(const char* Context)
@@ -335,7 +336,10 @@ static int SoftTpmCreateCa(
     if (name == NULL
         || X509_NAME_add_entry_by_txt(
                name, "CN", MBSTRING_ASC,
-               (const unsigned char*)SOFTTPM_CA_COMMON_NAME, -1, -1, 0) != 1)
+               (const unsigned char*)SOFTTPM_CA_COMMON_NAME, -1, -1, 0) != 1
+        || X509_NAME_add_entry_by_txt(
+               name, "O", MBSTRING_ASC,
+               (const unsigned char*)SOFTTPM_ORGANIZATION, -1, -1, 0) != 1)
     {
         goto cleanup;
     }
@@ -520,7 +524,10 @@ int ek_certificate_issue(
     if (name == NULL
         || X509_NAME_add_entry_by_txt(
                name, "CN", MBSTRING_ASC,
-               (const unsigned char*)SOFTTPM_EK_COMMON_NAME, -1, -1, 0) != 1)
+               (const unsigned char*)SOFTTPM_EK_COMMON_NAME, -1, -1, 0) != 1
+        || X509_NAME_add_entry_by_txt(
+               name, "O", MBSTRING_ASC,
+               (const unsigned char*)SOFTTPM_ORGANIZATION, -1, -1, 0) != 1)
     {
         goto cleanup;
     }

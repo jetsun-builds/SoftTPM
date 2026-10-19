@@ -44,12 +44,20 @@ endif()
 
 set(SwitchesFile "${SoftTpm_ConfigOutDir}/TpmConfiguration/TpmBuildSwitches.h")
 set(ProfileFile "${SoftTpm_ConfigOutDir}/TpmConfiguration/TpmProfile_Misc.h")
+set(ProfileCommonFile "${SoftTpm_ConfigOutDir}/TpmConfiguration/TpmProfile_Common.h")
+set(VersionFile "${SoftTpm_ConfigOutDir}/SoftTpmPrepare.version")
+
+# Bump this whenever the patches below change so that existing build trees are
+# refreshed instead of silently keeping the previous configuration.
+set(SoftTpmPrepareVersion "3")
 
 set(AlreadyPrepared FALSE)
-if (EXISTS "${SwitchesFile}")
+if (EXISTS "${SwitchesFile}" AND EXISTS "${VersionFile}")
     file(READ "${SwitchesFile}" ExistingSwitches)
     string(FIND "${ExistingSwitches}" "#define SIMULATION                  NO" Found)
-    if (NOT Found EQUAL -1)
+    file(READ "${VersionFile}" PreparedVersion)
+    string(STRIP "${PreparedVersion}" PreparedVersion)
+    if (NOT Found EQUAL -1 AND PreparedVersion STREQUAL SoftTpmPrepareVersion)
         set(AlreadyPrepared TRUE)
     endif()
 endif()
@@ -85,7 +93,21 @@ if (NOT AlreadyPrepared)
         "#define NV_MEMORY_SIZE             16384"
         "#define NV_MEMORY_SIZE             32768"
         Profile "${Profile}")
+    # The reference default of three transient objects is too small for the
+    # Windows TPM stack: tpmtool's ekhelper keeps SRK, EK and certificate
+    # objects loaded at once and fails with TPM_RC_OBJECT_MEMORY (0x902).
+    string(REPLACE
+        "#define MAX_LOADED_OBJECTS         3"
+        "#define MAX_LOADED_OBJECTS         8"
+        Profile "${Profile}")
     file(WRITE "${ProfileFile}" "${Profile}")
+
+    file(READ "${ProfileCommonFile}" ProfileCommon)
+    string(REGEX REPLACE
+        "#define ALG_SHA512([ \t]+)ALG_NO"
+        "#define ALG_SHA512\\1ALG_YES"
+        ProfileCommon "${ProfileCommon}")
+    file(WRITE "${ProfileCommonFile}" "${ProfileCommon}")
 
     file(READ "${SwitchesFile}" Switches)
     foreach (Expected
@@ -103,6 +125,18 @@ if (NOT AlreadyPrepared)
     if (Found EQUAL -1)
         message(FATAL_ERROR "Patch failed, missing: NV_MEMORY_SIZE 32768")
     endif()
+    string(FIND "${Profile}" "#define MAX_LOADED_OBJECTS         8" Found)
+    if (Found EQUAL -1)
+        message(FATAL_ERROR "Patch failed, missing: MAX_LOADED_OBJECTS 8")
+    endif()
+
+    file(READ "${ProfileCommonFile}" ProfileCommon)
+    string(REGEX MATCH "#define ALG_SHA512[ \t]+ALG_YES" Found "${ProfileCommon}")
+    if (Found STREQUAL "")
+        message(FATAL_ERROR "Patch failed, missing: ALG_SHA512 ALG_YES")
+    endif()
+
+    file(WRITE "${VersionFile}" "${SoftTpmPrepareVersion}\n")
 endif()
 
 if (AlreadyPrepared)

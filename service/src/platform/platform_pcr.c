@@ -46,6 +46,12 @@ static const TPM_ALG_ID DefaultActivePcrBanks[] = {
 #  endif
     TPM_ALG_SHA384
 #endif
+#if ALG_SHA512
+#  if ALG_SHA256 || ALG_SHA384
+    ,
+#  endif
+    TPM_ALG_SHA512
+#endif
 };
 
 static uint16_t SoftTpmHashDigestSize(TPM_ALG_ID hashAlg)

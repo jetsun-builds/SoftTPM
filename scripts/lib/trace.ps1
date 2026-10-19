@@ -4,7 +4,7 @@
 # direct driver test that bypasses TBS (opens \\.\TPM and issues the two
 # TBS-facing IOCTLs by hand).
 #
-# Usage (elevated PowerShell):  .\scripts\trace.ps1
+# Usage (elevated PowerShell):  .\scripts\test-debug.ps1 -Mode Trace
 
 $ErrorActionPreference = 'Stop'
 
@@ -108,7 +108,7 @@ if ($sys) {
     Write-Output '  not present in System32\drivers'
 }
 
-$packageSys = Join-Path $PSScriptRoot '..\driver\x64\Release\SoftTpmDriver\SoftTpmDriver.sys'
+$packageSys = Join-Path $PSScriptRoot '..\..\driver\x64\Release\SoftTpmDriver\SoftTpmDriver.sys'
 if (Test-Path $packageSys) {
     $packageHash = (Get-FileHash $packageSys -Algorithm MD5).Hash
     Write-Output ("  package sys: {0} bytes  md5 {1}" -f (Get-Item $packageSys).Length, $packageHash)

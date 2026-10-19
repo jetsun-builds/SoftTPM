@@ -12,6 +12,7 @@
 #define SOFTTPM_WBCL_EVENT_NO_ACTION 0x00000003u
 #define SOFTTPM_WBCL_ALG_SHA256 0x000Bu
 #define SOFTTPM_WBCL_ALG_SHA384 0x000Cu
+#define SOFTTPM_WBCL_ALG_SHA512 0x000Du
 
 typedef struct
 {
@@ -91,11 +92,13 @@ static int SoftTpmWbclBuild(SOFTTPM_WBCL_BUFFER* Buffer)
     SoftTpmWbclAppendU8(Buffer, 2);
     SoftTpmWbclAppendU8(Buffer, 0);
     SoftTpmWbclAppendU8(Buffer, 2);
-    SoftTpmWbclAppendU32(Buffer, 2);
+    SoftTpmWbclAppendU32(Buffer, 3);
     SoftTpmWbclAppendU16(Buffer, SOFTTPM_WBCL_ALG_SHA256);
     SoftTpmWbclAppendU16(Buffer, 32);
     SoftTpmWbclAppendU16(Buffer, SOFTTPM_WBCL_ALG_SHA384);
     SoftTpmWbclAppendU16(Buffer, 48);
+    SoftTpmWbclAppendU16(Buffer, SOFTTPM_WBCL_ALG_SHA512);
+    SoftTpmWbclAppendU16(Buffer, 64);
     SoftTpmWbclAppendU8(Buffer, 0);
 
     SoftTpmWbclPatchU32(

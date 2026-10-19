@@ -19,7 +19,6 @@
 
 #define SOFTTPM_TPM_DEVICE_NAME L"\\Device\\SoftTpmTpm"
 #define SOFTTPM_TPM_LINK_NAME L"\\DosDevices\\TPM"
-#define SOFTTPM_TPM_WIN32_NAME L"\\\\.\\TPM"
 
 #define SOFTTPM_POOL_TAG 'sTpm'
 

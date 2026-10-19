@@ -278,7 +278,7 @@ if (-not $SkipDriver)
     if ($script:ExternalExitCode -ne 0) { throw 'build of SoftTpmDriver failed' }
     else
     {
-        Write-Host 'The driver must be test-signed before it can load: .\scripts\test-sign.ps1'
+        Write-Host 'The driver must be test-signed before it can load: .\scripts\sign.ps1'
     }
 }
 
@@ -317,5 +317,5 @@ if (-not $SkipDriver)
 }
 Write-Host "Tool:     $softTpmRoot\tools\SoftTpmStatus\bin\SoftTpmStatus.exe"
 Write-Host ''
-Write-Host 'Next: .\scripts\test-sign.ps1'
+Write-Host 'Next: .\scripts\sign.ps1'
 Write-Host '      .\scripts\install.ps1'

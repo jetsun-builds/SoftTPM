@@ -1,6 +1,7 @@
 # Build outputs
 build/
 logs/
+driver/x64/
 
 # Visual Studio / MSBuild intermediates
 .vs/
@@ -25,4 +26,4 @@ obj/
 
 # Local VM development workflow (kept on disk, not published)
 WINDOWS-VM-RUNBOOK.txt
-scripts/session.ps1
+prove.md

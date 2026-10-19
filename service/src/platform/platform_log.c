@@ -23,10 +23,11 @@
 
 #define SOFTTPM_LOG_EXTEND_COMMAND_SIZE 1024u
 #define SOFTTPM_LOG_EXTEND_RESPONSE_SIZE 64u
+#define SOFTTPM_LOG_DIGEST_VALUES_SIZE (4u + SOFTTPM_LOG_MAX_DIGESTS * (2u + 64u))
 
-#define SOFTTPM_LOG_ALG_SHA1 0x0004u
 #define SOFTTPM_LOG_ALG_SHA256 0x000Bu
 #define SOFTTPM_LOG_ALG_SHA384 0x000Cu
+#define SOFTTPM_LOG_ALG_SHA512 0x000Du
 
 #define SOFTTPM_LOG_SPEC_ID_SIGNATURE "Spec ID Event03"
 
@@ -48,9 +49,9 @@ typedef struct
 } SOFTTPM_LOG_EVENT;
 
 static const SOFTTPM_LOG_ALG s_supportedAlgorithms[] = {
-    {SOFTTPM_LOG_ALG_SHA1, 20},
     {SOFTTPM_LOG_ALG_SHA256, 32},
     {SOFTTPM_LOG_ALG_SHA384, 48},
+    {SOFTTPM_LOG_ALG_SHA512, 64},
 };
 
 static SOFTTPM_LOG_ALG s_algorithms[SOFTTPM_LOG_MAX_ALGORITHMS];
@@ -61,13 +62,13 @@ static uint32_t s_logSize = 0;
 
 static uint16_t SoftTpmLogReadU16(const unsigned char* Buffer)
 {
-    return (uint16_t)(((uint16_t)Buffer[0] << 8) | Buffer[1]);
+    return (uint16_t)(((uint16_t)Buffer[1] << 8) | Buffer[0]);
 }
 
 static uint32_t SoftTpmLogReadU32(const unsigned char* Buffer)
 {
-    return ((uint32_t)Buffer[0] << 24) | ((uint32_t)Buffer[1] << 16)
-           | ((uint32_t)Buffer[2] << 8) | (uint32_t)Buffer[3];
+    return ((uint32_t)Buffer[3] << 24) | ((uint32_t)Buffer[2] << 16)
+           | ((uint32_t)Buffer[1] << 8) | (uint32_t)Buffer[0];
 }
 
 static int SoftTpmLogFindAlgorithm(uint16_t Alg, uint16_t* Size)
@@ -318,6 +319,66 @@ static int SoftTpmLogValidate(const unsigned char* Data, uint32_t Size)
     return 0;
 }
 
+static uint32_t SoftTpmLogBuildDigestValues(
+    const SOFTTPM_LOG_EVENT* Event,
+    unsigned char* Buffer,
+    uint32_t BufferSize)
+{
+    uint32_t source = 4;
+    uint32_t written = 0;
+    uint32_t index;
+    uint32_t count = Event->DigestCount;
+
+    if (Event->DigestValuesSize < 4u
+        || SoftTpmLogReadU32(Event->DigestValues) != count)
+    {
+        return 0;
+    }
+
+    if (written + 4u > BufferSize)
+    {
+        return 0;
+    }
+
+    Buffer[written++] = (unsigned char)((count >> 24) & 0xFF);
+    Buffer[written++] = (unsigned char)((count >> 16) & 0xFF);
+    Buffer[written++] = (unsigned char)((count >> 8) & 0xFF);
+    Buffer[written++] = (unsigned char)(count & 0xFF);
+
+    for (index = 0; index < count; index++)
+    {
+        uint16_t alg;
+        uint16_t digestSize;
+
+        if (source + 2u > Event->DigestValuesSize)
+        {
+            return 0;
+        }
+
+        alg = SoftTpmLogReadU16(Event->DigestValues + source);
+        source += 2;
+
+        if (SoftTpmLogFindAlgorithm(alg, &digestSize) != 0)
+        {
+            return 0;
+        }
+
+        if (source + digestSize > Event->DigestValuesSize
+            || written + 2u + digestSize > BufferSize)
+        {
+            return 0;
+        }
+
+        Buffer[written++] = (unsigned char)((alg >> 8) & 0xFF);
+        Buffer[written++] = (unsigned char)(alg & 0xFF);
+        memcpy(Buffer + written, Event->DigestValues + source, digestSize);
+        written += digestSize;
+        source += digestSize;
+    }
+
+    return written;
+}
+
 static int SoftTpmLogReplay(const unsigned char* Data, uint32_t Size)
 {
     uint32_t offset = SOFTTPM_LOG_V1_EVENT_SIZE + SoftTpmLogReadU32(Data + 28);
@@ -329,7 +390,9 @@ static int SoftTpmLogReplay(const unsigned char* Data, uint32_t Size)
     {
         unsigned char command[SOFTTPM_LOG_EXTEND_COMMAND_SIZE];
         unsigned char response[SOFTTPM_LOG_EXTEND_RESPONSE_SIZE];
+        unsigned char digestValues[SOFTTPM_LOG_DIGEST_VALUES_SIZE];
         uint32_t commandSize;
+        uint32_t digestValuesSize;
         uint32_t responseSize = sizeof(response);
 
         if (SoftTpmLogParseEvent(Data, Size, &offset, &event) != 0)
@@ -345,10 +408,21 @@ static int SoftTpmLogReplay(const unsigned char* Data, uint32_t Size)
             continue;
         }
 
+        digestValuesSize = SoftTpmLogBuildDigestValues(
+            &event,
+            digestValues,
+            sizeof(digestValues));
+
+        if (digestValuesSize == 0)
+        {
+            log_error("platform log: cannot convert the PCR %u digest list for the extend command", event.PcrIndex);
+            return -1;
+        }
+
         commandSize = tpm_build_pcr_extend(
             event.PcrIndex,
-            event.DigestValues,
-            event.DigestValuesSize,
+            digestValues,
+            digestValuesSize,
             command,
             sizeof(command));
 

@@ -14,7 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$SoftTpmRoot = Split-Path -Parent $PSScriptRoot
+$SoftTpmRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $LogDirectory = Join-Path $SoftTpmRoot 'logs'
 $StateDirectory = Join-Path $env:ProgramData 'SoftTpm'
 $ServiceLog = Join-Path $StateDirectory 'softtpm.log'
@@ -257,13 +257,13 @@ Invoke-Step 'wbcl' {
     }
     else
     {
-        'platform log file: not present (synthetic WBCL mode)'
+        'platform log file: not present (spec-ID-only WBCL mode)'
     }
 
     $gatherDir = Join-Path $env:TEMP 'softtpm-tcglog'
     $capturedBootLog = Join-Path $env:TEMP 'softtpm-captured-bootlog.dat'
     $previousBootLog = Join-Path $gatherDir 'SRTMBoot.dat'
-    if ((Test-Path $previousBootLog) -and ((Get-Item $previousBootLog).Length -gt 69))
+    if ((Test-Path $previousBootLog) -and ((Get-Item $previousBootLog).Length -gt 73))
     {
         Copy-Item $previousBootLog $capturedBootLog -Force
         "preserved the previously gathered boot log at $capturedBootLog ($((Get-Item $capturedBootLog).Length) bytes)"
@@ -284,13 +284,13 @@ Invoke-Step 'replay-test' {
         (Join-Path $env:TEMP 'softtpm-tcglog\SRTMBoot.dat'),
         (Join-Path $env:TEMP 'softtpm-captured-bootlog.dat')
     ) |
-        Where-Object { (Test-Path $_) -and ((Get-Item $_).Length -gt 69) } |
+        Where-Object { (Test-Path $_) -and ((Get-Item $_).Length -gt 73) } |
         Sort-Object { (Get-Item $_).Length } -Descending |
         Select-Object -First 1
 
     if (-not $sourceLog)
     {
-        'no captured boot log larger than a synthetic WBCL is available; skipping the replay test'
+        'no captured boot log larger than a spec-ID-only WBCL is available; skipping the replay test'
         return
     }
 
@@ -336,6 +336,7 @@ Invoke-Step 'replay-test' {
     if (-not $replayOk)
     {
         'REPLAY TEST FAILED: the captured log was not replayed (see the service log above)'
+        'run scripts\test-debug.ps1 -Mode Inspect to see why the log was rejected'
         return
     }
 
@@ -349,6 +350,7 @@ Invoke-Step 'replay-test' {
         else
         {
             "REPLAY TEST FAILED: the published WBCL is $($wbcl.Length) bytes, expected $sourceSize"
+            'run scripts\test-debug.ps1 -Mode Inspect to inspect the captured log'
         }
     }
     catch

@@ -42,7 +42,7 @@
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
-      <TimeStamp>1.0.1017.1203</TimeStamp>
+      <TimeStamp>1.0.1018.1745</TimeStamp>
     </Inf>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup>
@@ -73,12 +73,4 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
-
-
-
-
-
-
-
-
 

@@ -1,35 +1,41 @@
 # SoftTPM
 
-<img width="3040" height="1554" alt="Screenshot 2026-10-17 222147" src="https://github.com/user-attachments/assets/149ee706-9631-40c8-823e-9c93ef399a36" />
+<img width="3040" height="1554" alt="SoftTPM on Windows" src="https://github.com/user-attachments/assets/149ee706-9631-40c8-823e-9c93ef399a36" />
 
-> **⚠️ Disclaimer & Warning:** 
-> This is a hobby project. I use AI tools to help me push progress on it, so please expect rough edges and verify anything you depend on. 
-> 
-> **I am NOT responsible for any system crashes or data loss.** Please do **not** install this driver on your primary Windows device (for testing purposes only!).
-> 
-> Contributions are always welcome! Feel free to open issues, send pull requests, report bugs, suggest ideas, or improve the docs.
+> **A quick heads-up:** This is a hobby project, and I've leaned on AI tools
+> quite a bit while building it. It works, but expect some rough edges—please
+> check anything you plan to rely on.
+>
+> **Please don't install this on your daily-driver PC.** It's a test-signed
+> kernel driver that takes over the platform TPM. It is **not Microsoft-signed**
+> and only loads with test signing enabled and Secure Boot disabled. If
+> something goes wrong, you could end up locked out of BitLocker volumes or
+> lose your Windows Hello setup. Distributing it for normal use would require
+> Microsoft attestation signing.
+>
+> If you find a bug, have an idea, or spot a mistake in the docs, please open
+> an issue or send a pull request. Thanks for taking a look.
 
 SoftTPM is an open-source software TPM 2.0 for Windows. It presents a TPM 2.0
-to the Windows TPM stack without TPM hardware: `tbs.sys` binds to it, and
-every API built on TBS (`Win32_Tpm`, `tpm.msc`, `tpmtool`, the Microsoft
-Platform Crypto Provider, BitLocker's runtime paths, Windows Hello) treats it
-as an on-board TPM.
+device to the Windows TPM stack without TPM hardware: `tbs.sys` binds to it,
+and the TBS-based Windows TPM APIs (`Win32_Tpm`, `tpm.msc`, `tpmtool`, the
+Microsoft Platform Crypto Provider) treat it as an on-board TPM.
 
-It consists of two components:
+The project has two runtime components:
 
 - `driver/` - a KMDF driver that owns `\??\TPM` (the device TBS opens) and
-  implements the `tpm.sys`-compatible IOCTL surface: it forwards TPM commands
-  to user mode, answers the device-information IOCTL, and provides a synthetic
+  implements the `tpm.sys`-compatible IOCTL surface. It forwards TPM commands
+  to user mode, answers the device-information IOCTL and provides a synthetic
   Physical Presence Interface responder.
-- `service/` - a Windows service (LocalSystem) that hosts Microsoft's TPM 2.0
+- `service/` - a LocalSystem Windows service that hosts Microsoft's TPM 2.0
   reference implementation (`ms-tpm-20-ref`), persists TPM state across
   reboots, and provisions the Endorsement Key (EK), Storage Root Key (SRK)
-  and EK certificate that Windows expects to find on a real TPM.
+  and EK certificate Windows expects from a real TPM.
 
 ## How it works
 
 ```
- applications and OS features (Get-Tpm, tpm.msc, BitLocker, ...)
+ applications and OS features (Get-Tpm, tpm.msc, tpmtool)
         |
    tbs.sys / tbs.dll                      Windows TPM Base Services
         |  \??\TPM
@@ -41,7 +47,10 @@ It consists of two components:
                                state in %ProgramData%\SoftTpm
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the details.
+See [docs/architecture.md](docs/architecture.md) for the boot flow, command
+path and design decisions, and
+[docs/attestation-and-limits.md](docs/attestation-and-limits.md) for the
+trust model.
 
 ## Status
 
@@ -51,17 +60,15 @@ SoftTPM is built and validated on Windows 11 x64 with the test-signed driver:
   `tpmtool getdeviceinformation` works.
 - TBS command traffic, `Tbsi_GetDeviceInfo`, and EK/SRK `ReadPublic` succeed;
   keys created through the Microsoft Platform Crypto Provider are TPM-backed.
-- The scheduled `Tpm-Maintenance` task completes with status 0 and stores the
+- The scheduled `Tpm-Maintenance` task completes with result 0 and stores the
   self-issued EK certificate in the Windows `EKCertStore`.
 - TPM state survives service restarts and machine reboots.
-
-The service publishes a TCG platform log (WBCL) so Windows platform log checks
-(`Tbsi_Get_TCG_Log`, `INFORMATION_TCG_EVENT_LOG`) find a log: by default a
-synthetic log with only the spec ID event, or a captured firmware log that the
-service validates and replays into the PCRs at startup
-(`scripts\capture-platform-log.ps1`). A software TPM cannot unseal before the
-OS boots, so automatic OS-drive BitLocker unlock remains out of scope. The
-full list is in [docs/attestation-and-limits.md](docs/attestation-and-limits.md).
+- The engine exposes SHA-256, SHA-384 and SHA-512 PCR banks. A captured
+  three-bank boot log is validated, replayed at every service start and
+  published as the WBCL. The verified round trip uses a 92,139-byte log
+  (38 measurement events plus the spec ID event): after a reboot the WBCL is
+  byte-identical to `platform-log.bin`, and `tpmtool gatherlogs` completes
+  without object-context errors.
 
 ## Feature support
 
@@ -70,17 +77,21 @@ full list is in [docs/attestation-and-limits.md](docs/attestation-and-limits.md)
 | TPM discovery (`Get-Tpm`, `Win32_Tpm`, `tpm.msc`, `tpmtool`) | Works |
 | TPM 2.0 command traffic through TBS (`GetCapability`, `ReadPublic`, key creation) | Works |
 | EK/SRK provisioning and EK certificate at NV index `0x01C00002` | Works |
+| PCR banks | SHA-256, SHA-384 and SHA-512, allocated when the TPM state is manufactured |
 | Windows TPM maintenance (`Tpm-Maintenance`, `EKCertStore`) | Works (result 0, `EkCertificatePresent = 1`) |
 | TPM-backed keys through the Microsoft Platform Crypto Provider | Works at runtime (software root of trust) |
+| Windows Hello enrollment | Untested; expected to work through the same PCP path |
 | TPM state persistence across service restarts and reboots | Works |
 | BitLocker data volume with a TPM protector (runtime seal/unseal) | Untested; expected to work while Windows is running |
-| Windows Hello enrollment | Untested; expected to work through the same PCP path |
-| BitLocker setup on the OS drive | The wizard's TCG-log check now finds a log (synthetic WBCL or a replayed platform log); automatic pre-boot unlock remains unsupported |
-| BitLocker automatic pre-boot unlock | Not supported: the UEFI boot path cannot reach a software TPM, so a recovery prompt appears |
-| `Ready For Attestation` / remote attestation | The TCG log bit is satisfied by the published WBCL (synthetic or replayed); attestation with external verifiers still fails because the EK chain is not Microsoft-trusted |
-| Firmware measurement PCRs / measured boot | Optional: a captured platform log is replayed into the PCRs and published as the WBCL; the values are still produced by the service, not by the boot firmware |
+| BitLocker on the OS drive with a TPM protector | Not supported: the system check reboots into an environment that cannot reach a software TPM. Use a password/USB startup protector. |
+| BitLocker automatic pre-boot unlock | Not supported: the UEFI boot path cannot reach a software TPM |
+| `Ready For Attestation` / remote attestation | The TCG log requirement is met by the published WBCL; remote attestation still fails because the EK chain is not Microsoft-trusted |
+| Firmware measurement PCRs / measured boot | A captured platform log is replayed into all three PCR banks, but the values are produced by the service at startup, not by the firmware |
 | Attestation-only IOCTLs (`Tbsi_Create_Windows_Key`, revoke flows) | Not implemented |
 | Locality != 0 policies, physical-presence flows, field upgrade | Not supported |
+
+The full list of limitations is in
+[docs/attestation-and-limits.md](docs/attestation-and-limits.md).
 
 ## Requirements
 
@@ -90,84 +101,177 @@ full list is in [docs/attestation-and-limits.md](docs/attestation-and-limits.md)
 - OpenSSL (headers and x64 `libcrypto`) for the TPM reference implementation
   and EK certificate generation. 1.1.1 or 3.x; the build script detects both
   installation layouts.
-- Microsoft's `ms-tpm-20-ref` at `..\ms-tpm-20-ref` relative to the `softtpm`
-  directory.
-- Test signing enabled (Secure Boot off) to run the self-signed driver
+- Microsoft's `ms-tpm-20-ref` checked out at `..\ms-tpm-20-ref` relative to
+  the `softtpm` directory (see [docs/Install-SoftTPM.md](docs/Install-SoftTPM.md)).
+- Test signing enabled and Secure Boot disabled to run the self-signed driver.
 
-## Build
+## Repository layout
 
-From an elevated Developer PowerShell:
+| Path | Contents |
+| --- | --- |
+| `driver/` | KMDF driver, INF and Visual Studio project |
+| `service/` | Windows service, TPM engine integration and platform interface |
+| `shared/` | Driver/service protocol header |
+| `tools/SoftTpmStatus/` | TBS smoke-test tool |
+| `scripts/` | The five supported entry points; internal helpers live in `scripts/lib/` |
+| `docs/` | Architecture, interfaces, limitations and install guides |
+
+## Supported scripts
+
+Only these five entry points are supported. Internal helpers under
+`scripts/lib/` are implementation details and may change.
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/build.ps1` | Builds `ms-tpm-20-ref`, the service, the driver (unless `-SkipDriver`) and `SoftTpmStatus` |
+| `scripts/sign.ps1` | Creates or reuses a self-signed test certificate and signs the driver, service and tool |
+| `scripts/install.ps1` | Installs the driver package and registers/starts `SoftTpmService` |
+| `scripts/uninstall.ps1` | Stops the service, removes the device and driver package; `-RemoveState` also destroys TPM state |
+| `scripts/test-debug.ps1` | Test and diagnostics entry point (`-Mode Full`, `Capture`, `Inspect`, `Validate`, `Trace`, `Status`, `Session`) |
+
+## Quick start
+
+From an elevated Developer PowerShell in the `softtpm` directory:
 
 ```powershell
-cd softtpm
+# 1. Build
 .\scripts\build.ps1 -OpenSslRoot "C:\Program Files\OpenSSL-Win64"
+
+# 2. Sign the binaries with a local test certificate
+.\scripts\sign.ps1
+
+# 3. Enable test signing (Secure Boot must be off), then reboot
+bcdedit /set testsigning on
+Restart-Computer -Force
+
+# 4. Install the driver and service
+.\scripts\install.ps1
+
+# 5. Check the result
+.\scripts\test-debug.ps1 -Mode Status
 ```
 
-The script builds the reference TPM core into `build/tpm-prefix`, configures
-and builds the service into `build/service`, builds the driver with MSBuild
-when the WDK is present, and builds the `SoftTpmStatus` tool. Useful switches:
-`-SkipDriver` (no WDK), `-SkipTool`, `-Clean`. `-OpenSslRoot` defaults to
-`$env:SOFTTPM_OPENSSL_ROOT`.
+`install.ps1` detects a physical or firmware TPM already answering at
+`\??\TPM`. Both cannot be active at once; pass `-DisableExistingTpm` to
+disable the existing one, or disable it manually in Device Manager first.
 
-## Sign and install
+If a previous driver image is still loaded, Windows cannot replace its `.sys`
+file in place. `install.ps1` stages the replacement for the next boot and
+says so; the new driver is active only after that reboot.
 
-```powershell
-.\scripts\test-sign.ps1                       # self-sign driver, service, tool
-.\scripts\install.ps1                         # install driver, register service
-.\scripts\install.ps1 -DisableExistingTpm     # also disable a physical/firmware TPM
+## Driver signing
+
+The current driver is test-signed with a local certificate. Enable test mode
+from an elevated command prompt, then reboot:
+
+```cmd
+bcdedit /set testsigning on
+Restart-Computer -Force
 ```
 
-A physical or firmware TPM must be disabled before installing SoftTPM, because
-both claim the name `\??\TPM`. `install.ps1` detects and disables one when
-told to with `-DisableExistingTpm`.
+Secure Boot must be disabled first. To turn test signing off after testing:
 
-If a previous version of the driver is loaded, Windows cannot replace its
-`.sys` file in place. `install.ps1` stages the replacement for the next boot
-and says so; the new driver is active only after that reboot.
+```cmd
+bcdedit /set testsigning off
+```
+
+This is not a Microsoft signature. Microsoft attestation signing is intended
+for testing scenarios and does not make the driver Windows Certified. Normal
+retail/Windows Update distribution requires HLK/WHQL certification through
+the Windows Hardware Compatibility Program. A software TPM does not bypass
+that process, and a Microsoft signature is not an endorsement of the design.
 
 ## Verify
 
 ```powershell
-.\tools\SoftTpmStatus\bin\SoftTpmStatus.exe   # Tbsi_GetDeviceInfo + EK/SRK
+.\scripts\test-debug.ps1 -Mode Status
 Get-Tpm
 tpmtool getdeviceinformation
 ```
 
-The end-to-end harness rebuilds, reinstalls, runs provisioning checks and
-collects logs under `logs/`:
+The status mode prints the service/device state, PnP status, `Get-Tpm`,
+`SoftTpmStatus`, `tpmtool`, the WBCL size, the active platform log and the
+tail of the service log.
+
+The end-to-end harness rebuilds the service, refreshes the installation,
+provisions, exercises the platform-log replay, collects logs under `logs/`
+and prints a summary:
 
 ```powershell
-.\scripts\run-provision-test.ps1
+.\scripts\test-debug.ps1 -Mode Full
 ```
 
-For protocol-level debugging, `.\scripts\trace.ps1` dumps service and device
-state, the driver trace ring, and exercises the TPM device directly (bypassing
-TBS).
+Useful switches: `-SkipBuild`, `-ReinstallDriver`, `-ConsoleDebug`,
+`-AttestationTest`, `-SkipCdb`, `-Configuration Debug`.
 
-To give SoftTPM a real platform log, capture one while the firmware TPM is
-active (`.\scripts\capture-platform-log.ps1`) and place it at
-`%ProgramData%\SoftTpm\platform-log.bin`; the service replays it into the PCRs
-and publishes it as the WBCL on the next start.
+For protocol-level debugging, `-Mode Trace` dumps service and device state,
+the driver trace ring, and exercises the TPM device directly (bypassing TBS).
+
+## Platform log replay
+
+Windows reads the boot-time TCG event log as the WBCL registry value. A
+machine that boots without a firmware TPM never gets one, so SoftTPM
+publishes a spec-ID-only log by default. It can instead replay a real log
+from this machine's firmware:
+
+```powershell
+# Run while the firmware TPM is still active, before installing SoftTPM
+.\scripts\test-debug.ps1 -Mode Capture -OutputPath C:\temp\platform-log.bin
+
+# Then install SoftTPM, place the file in the state directory and restart
+# the service (or let the Full harness replay a gathered SRTMBoot.dat):
+Copy-Item C:\temp\platform-log.bin "$env:ProgramData\SoftTpm\platform-log.bin"
+Restart-Service SoftTpmService
+
+# Inspect the log offline with the same validation the service uses
+.\scripts\test-debug.ps1 -Mode Inspect -Path C:\temp\platform-log.bin
+
+# After a reboot, verify the replay round trip
+.\scripts\test-debug.ps1 -Mode Validate
+```
+
+At startup the service validates the log, replays every measurement event
+into the SHA-256/384/512 PCR banks and publishes the log unchanged as the
+WBCL. After a reboot the WBCL must still match `platform-log.bin` (the
+validated run is byte-for-byte; a trailing extension is also accepted). `-Mode Validate` also runs `tpmtool gatherlogs` and reports attestation
+readiness. Results are written to `logs/`.
+
+The replayed PCRs and the published log agree with each other, but both are
+produced by the service: this is not proof that the machine actually booted
+that way.
 
 ## Uninstall and reset
 
 ```powershell
-.\scripts\uninstall.ps1                # stop service, uninstall driver
+.\scripts\uninstall.ps1                # stop service, remove device and driver
 .\scripts\uninstall.ps1 -RemoveState   # also delete TPM state and keys
+.\scripts\uninstall.ps1 -EnableExistingTpm  # re-enable the previous TPM
 ```
 
-Deleting `%ProgramData%\SoftTpm` is equivalent to replacing a physical TPM:
-any BitLocker volume sealed to this TPM requires its recovery key afterwards.
+`-RemoveState` deletes `%ProgramData%\SoftTpm` and is equivalent to replacing
+the TPM chip: BitLocker volumes sealed to SoftTPM need their recovery keys,
+and Windows Hello enrollment is lost.
+
+## Real hardware
+
+For a spare physical Windows machine, including the firmware-TPM capture
+order and BitLocker precautions, follow
+[docs/Install-SoftTPM.md](docs/Install-SoftTPM.md).
 
 ## Troubleshooting
 
 - `Get-Tpm` reports no TPM: check `sc query SoftTpmDriver` and
   `Get-Service SoftTpmService`. If `install.ps1` warned about a staged driver
   replacement, reboot.
-- Service log: `%ProgramData%\SoftTpm\softtpm.log`. Harness logs:
-  `logs/` under the repository root.
-- Driver trace ring (unknown IOCTLs, timeouts, rejected responses, PPI calls):
-  `.\scripts\trace.ps1`.
+- Service log: `%ProgramData%\SoftTpm\softtpm.log`. Harness logs: `logs/`
+  under the repository root.
+- Driver trace ring (unknown IOCTLs, timeouts, rejected responses, PPI
+  calls): `.\scripts\test-debug.ps1 -Mode Trace`.
+- Platform log rejected: `.\scripts\test-debug.ps1 -Mode Inspect` explains
+  which event or header field fails.
+- After a reboot, run `.\scripts\test-debug.ps1 -Mode Validate` before
+  investigating further; it checks the service replay, WBCL bytes, log
+  validity, object-context health and attestation readiness.
 
 ## Documentation
 
@@ -177,9 +281,32 @@ any BitLocker volume sealed to this TPM requires its recovery key afterwards.
 | [docs/driver-tpm-interface.md](docs/driver-tpm-interface.md) | The TBS to `tpm.sys` interface SoftTPM implements |
 | [docs/service-protocol.md](docs/service-protocol.md) | Driver to service protocol, timeouts, recovery |
 | [docs/attestation-and-limits.md](docs/attestation-and-limits.md) | EK provisioning, trust model, limitations |
+| [docs/testing.md](docs/testing.md) | `test-debug.ps1` modes, logs and expected results |
+| [docs/Install-SoftTPM.md](docs/Install-SoftTPM.md) | Step-by-step installation |
+| [docs/references.md](docs/references.md) | Prior art used for the design and its license compatibility |
 
+## References
+
+SoftTPM builds on, and was informed by, these projects:
+
+- Microsoft [`ms-tpm-20-ref`](https://github.com/microsoft/ms-tpm-20-ref) -
+  the TPM 2.0 reference implementation hosted by the service.
+- Intel [`vtpm-td`](https://github.com/intel/vtpm-td) (in the project root as
+  `vtpm-td/`) - vTPM-in-TD architecture, command servicing and attestation
+  flow.
+- [`vTPM-attestation`](https://github.com/hecmay/vTPM-attestation) - read-only
+  reference for UEFI attestation, event-log and PCR ideas. Not vendored and no
+  top-level license, so do not copy code from it.
+- Microsoft [`TSS.MSR`](https://github.com/microsoft/TSS.MSR) - TPM 2.0
+  software stack used as a protocol reference.
+- [`tpm2-tss`](https://github.com/tpm2-software/tpm2-tss) and
+  [`tpm2-tss-engine`](https://github.com/tpm2-software/tpm2-tss-engine) -
+  Linux TPM stack references for TCTI/ESAPI behaviour.
 
 ## Legal
 
-The TPM engine is Microsoft's `ms-tpm-20-ref` under its own license. SoftTPM
-driver, service and tool sources are provided under the MIT license.
+The TPM engine is Microsoft's `ms-tpm-20-ref`, under the BSD-2-Clause
+license. SoftTPM driver, service, tool and script sources are provided under
+the MIT license. Binary releases that include `SoftTpmService` must carry the
+`ms-tpm-20-ref` notice and the notice for the linked OpenSSL version; see
+[docs/references.md](docs/references.md).

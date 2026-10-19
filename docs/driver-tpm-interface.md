@@ -16,11 +16,11 @@ SoftTPM as a hardware TPM.
 | I/O type | `METHOD_BUFFERED` |
 | Exclusive | No (TBS and diagnostics tools may open it concurrently) |
 | Dispatch | Sequential queue |
-| ACL | `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;BU)` - SYSTEM, Administrators, and services running as built-in users. |
+| ACL | `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;BU)` - SYSTEM, Administrators, and services running as built-in users |
 
 The device is a raw control device owned by the KMDF driver; it exists while
 the driver is loaded and disappears with it. The driver itself is started at
-boot through a root-enumerated device installed by `install.ps1`.
+boot through a root-enumerated device installed by `scripts/install.ps1`.
 
 ## IOCTL set
 
@@ -146,9 +146,9 @@ expects to find it.
 ## Diagnostics: counters and trace ring
 
 SoftTPM keeps per-driver counters and a 128-entry ring buffer
-(`SOFTTPM_TRACE_ENTRY`, see
-[service-protocol.md](service-protocol.md) for the layout) so the TBS-facing
-surface can be observed from user mode without a debugger:
+(`SOFTTPM_TRACE_ENTRY`, see [service-protocol.md](service-protocol.md) for the
+layout) so the TBS-facing surface can be observed from user mode without a
+debugger:
 
 - Unknown IOCTLs complete with `STATUS_INVALID_DEVICE_REQUEST`, increment
   `UnknownIoctlCount`, are logged with `DbgPrintEx`, and are traced with the
@@ -163,7 +163,7 @@ surface can be observed from user mode without a debugger:
 
 `GET_STATUS` exposes the counters; `READ_TRACE` returns the ring. The service
 dumps the last 8 entries automatically when its `SEND_RESPONSE` call fails,
-and `scripts/trace.ps1` prints the ring on demand.
+and `scripts/test-debug.ps1 -Mode Trace` prints the ring on demand.
 
 ## Locality
 
@@ -181,5 +181,5 @@ satisfied. This is a documented limitation; see
   device itself lives until the driver unloads.
 - While a previous driver image is still loaded, Windows cannot replace the
   `.sys` file in place. `install.ps1` stages the replacement for the next boot
-  and warns; `run-provision-test.ps1` detects the staged file and prints a
+  and warns; `test-debug.ps1 -Mode Full` detects the staged file and prints a
   note, because TPM behavior does not change until the reboot.

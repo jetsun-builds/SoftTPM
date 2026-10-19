@@ -52,5 +52,5 @@ KmdfLibraryVersion = 1.15
 ProviderName     = "SoftTPM Project"
 ManufacturerName = "SoftTPM Project"
 DiskName         = "SoftTPM Driver Installation Disk"
-SoftTpm.DeviceDesc = "SoftTPM Software TPM 2.0"
+SoftTpm.DeviceDesc = "Firmware Trusted Platform Module 2.0 (SoftTPM Project)"
 ServiceDesc      = "SoftTPM Driver"

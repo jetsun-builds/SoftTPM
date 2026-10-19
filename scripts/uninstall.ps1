@@ -82,7 +82,7 @@ else
 $wbclKeyPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\IntegrityServices'
 if (Get-ItemProperty -Path $wbclKeyPath -Name 'WBCL' -ErrorAction SilentlyContinue)
 {
-    Write-Host 'Removing the synthetic SoftTPM platform log (WBCL)'
+    Write-Host 'Removing the SoftTPM platform log (WBCL)'
     Remove-ItemProperty -Path $wbclKeyPath -Name 'WBCL' -Force -ErrorAction SilentlyContinue
 }
 

@@ -1,7 +1,7 @@
 # Attestation, Provisioning and Limits
 
-Windows expects to find more on a TPM than just the engine: an Endorsement
-Key, a Storage Root Key and an EK certificate. `provision_run` creates them
+Windows expects more from a TPM than a command engine: an Endorsement Key, a
+Storage Root Key and an EK certificate. `provision_run` creates them
 idempotently on first start and leaves them alone afterwards.
 
 ## What gets provisioned
@@ -45,29 +45,29 @@ returns the Windows Boot Configuration Log (WBCL) kept in the registry value
 boots without a firmware TPM never gets that value, which is why
 `INFORMATION_TCG_EVENT_LOG` is missing and `Ready For Attestation` reports
 false. On startup the service therefore publishes a well-formed crypto-agile
-TCG log: a spec ID event (`Spec ID Event03`, SHA-256 and SHA-384 digest banks)
-followed by the replayed platform events, if a captured log is configured
-(below).
+TCG log: a spec ID event (`Spec ID Event03`, SHA-256, SHA-384 and SHA-512
+digest banks) followed by the replayed platform events, if a captured log is
+configured (below).
 
 Without a captured log the WBCL contains only the spec ID event. That log
 describes the state the software TPM actually reports: PCRs start at their
 reset values, nothing measured the boot, and an empty log and the untouched
 PCR banks agree with each other. Disable publishing with
-`--no-publish-wbcl`; `uninstall.ps1` removes the value.
+`--no-publish-wbcl`; `scripts/uninstall.ps1` removes the value.
 
 ### Replaying a captured platform log (optional)
 
 SoftTPM can replay a real TCG event log taken from this machine's firmware
-(or firmware vTPM) and publish it instead of the empty log:
+(or firmware vTPM) and publish it instead of the spec-ID-only log:
 
 1. While the firmware TPM is still active, run
-   `scripts\capture-platform-log.ps1`; it snapshots the WBCL from the
+   `scripts\test-debug.ps1 -Mode Capture`; it snapshots the WBCL from the
    registry into `platform-log.bin`.
 2. Place the file at `%ProgramData%\SoftTpm\platform-log.bin` (or point at it
    with `--platform-log=PATH`) and restart the service.
 
-`scripts\run-provision-test.ps1` performs both phases automatically: after the
-synthetic-WBCL checks it preserves the `SRTMBoot.dat` captured by
+`scripts\test-debug.ps1 -Mode Full` performs both phases automatically: after
+the baseline WBCL checks it preserves the `SRTMBoot.dat` captured by
 `tpmtool gatherlogs`, installs it as `platform-log.bin`, restarts the service,
 and checks that the published WBCL matches the captured log byte for byte.
 
@@ -77,12 +77,24 @@ measurement event into the PCR banks the log and the TPM share by running
 `TPM2_PCR_Extend` internally, and publishes the log unchanged as the WBCL.
 Details:
 
-- Digest banks the TPM does not maintain (SHA-1) are parsed but not measured;
-  banks with no digests in the log (typically SHA-384) keep their reset
-  values.
+- The TPM maintains SHA-256, SHA-384 and SHA-512 PCR banks. A log whose spec
+  ID event declares any other digest algorithm (for example SHA-1 or SM3) is
+  rejected; banks without digests in the log keep their reset values.
+- The active bank set is fixed when the TPM state is manufactured. A state
+  created by an older build keeps its original banks after this change; run
+  `scripts\uninstall.ps1 -RemoveState` and reinstall (which deletes
+  `%ProgramData%\SoftTpm`) to expose the SHA-512 bank. Replay still succeeds
+  either way, because `TPM2_PCR_Extend` ignores digests for banks that are
+  not allocated.
 - Events for PCR 17-22 (DRTM) are rejected: SoftTPM runs at locality 0.
-- An invalid or unreadable file is ignored with a warning, and the synthetic
-  log is published instead.
+- An invalid or unreadable file is ignored with a warning, and the
+  spec-ID-only log is published instead.
+- The round trip is verified end to end with a 92,139-byte log containing 38
+  measurement events. After rebooting with the log installed, the service
+  loads and replays it again, the post-boot WBCL is byte-identical to
+  `platform-log.bin`, and `scripts\test-debug.ps1 -Mode Validate` passes its
+  service, WBCL, inspection, `tpmtool gatherlogs` and attestation-readiness
+  checks.
 - The replayed PCRs and the published log agree with each other, but both are
   produced by the service at startup, not by the firmware: a verifier that
   replays the log gets self-consistent values, not proof that the machine
@@ -119,17 +131,18 @@ TPM in ways that matter:
 | Feature | Behavior with SoftTPM |
 | --- | --- |
 | TPM property queries, `Get-Tpm`, `tpm.msc` | Work. TBS sees a TPM 2.0 with the standard handles and certificate index. |
-| BitLocker TPM protector (sealing while Windows runs) | Seals and unseals through TBS while Windows is up. |
-| BitLocker setup on the OS drive | The wizard's "No TCG event is available" check is satisfied by the published platform log (below); automatic pre-boot unlock still cannot work (next row). |
+| BitLocker data-volume TPM protector (sealing while Windows runs) | Seals and unseals through TBS while Windows is up; automatic unlock still requires a protected OS drive. |
+| BitLocker on the OS drive with a TPM protector | Not supported. The TCG-log check is satisfied by the published platform log, but BitLocker's system check reboots and verifies that the boot environment can use the TPM; the pre-boot environment cannot reach a software TPM, so enabling with a TPM protector fails. Use a password/USB startup protector (with "Allow BitLocker without a compatible TPM") or a hardware TPM. |
 | Windows TPM maintenance (`Tpm-Maintenance`) | Completes with status 0 and stores the self-issued EK certificate in the Windows `EKCertStore`. With the platform log published, the `INFORMATION_TCG_EVENT_LOG` requirement is met; remote attestation still fails on the EK chain. |
 | BitLocker automatic pre-boot unlock | Does **not** work: the firmware/UEFI boot path cannot reach a software TPM. Expect a recovery prompt unless a password or recovery protector is also configured. Treat automatic unlock as unsupported. |
-| Windows Hello (TPM-backed keys) | Uses TBS at runtime; works, with the same software-root-of-trust caveat. |
+| Windows Hello (TPM-backed keys) | Uses TBS at runtime; expected to work, but untested in the validated matrix. The software-root-of-trust caveat applies. |
 | Remote attestation (MDM, fleet verification) | Fails: the EK certificate chain is not Microsoft-trusted. |
 | Measured boot / PCR-based policies | PCRs exist and extend; with a captured platform log they are replayed at startup, but the values still come from the service, not from the boot firmware. |
 
 Running a test-signed driver requires Secure Boot to be off; for production
-the driver needs Microsoft attestation signing. See the README for the build
-and install flow.
+the driver needs Microsoft attestation signing. See the README and
+[Install-SoftTPM.md](Install-SoftTPM.md) for the build and install
+flow.
 
 ## Known limitations
 
@@ -142,6 +155,18 @@ and install flow.
   timeout.
 - **NV memory is 32 KiB** (`NV_MEMORY_SIZE = 32768` in the patched
   `TpmConfiguration`). Objects and certificates must fit.
+- **Fixed transient object and session limits.** The profile provides 8
+  transient object slots (raised from the reference default of 3 so the
+  Windows TPM stack can keep the SRK, EK and certificate objects loaded) and
+  3 loaded sessions. These are compile-time constants; they are not part of
+  `tpm.state` and do not change when the state is re-manufactured. The
+  previous default of 3 produced `TPM_RC_OBJECT_MEMORY` (`0x80280902`) during
+  `tpmtool` EK operations.
+- **OS-drive BitLocker with a TPM protector cannot be enabled.** Enabling it
+  runs a system check that reboots into the pre-boot environment to verify TPM
+  access; the SoftTPM driver exists only in Windows, so the check fails. A
+  password or USB startup-key protector avoids the TPM at boot; data volumes
+  can use a TPM protector once Windows is running.
 - **No field upgrade.** The reference implementation's firmware upgrade
   commands are not wired to anything; `TPM2_FieldUpgradeData` flows are
   unsupported.
@@ -151,17 +176,18 @@ and install flow.
 - **No locality, no PP attestation, no hardware RNG.** Entropy comes from
   the OS CNG random source.
 - **The published platform log has no measurements by default.** The
-  synthetic WBCL satisfies Windows' "a TCG log exists" checks but contains
-  only the spec ID event. A captured platform log is replayed at startup, but
-  that is a replay, not evidence that the running firmware booted that way,
-  and it disappears when `uninstall.ps1` runs or when firmware writes a real
-  log on a machine with the previous TPM re-enabled.
+  spec-ID-only WBCL satisfies Windows' "a TCG log exists" checks. A captured
+  platform log is replayed at startup, but that is a replay, not evidence
+  that the running firmware booted that way, and it disappears when
+  `scripts\uninstall.ps1` runs or when firmware writes a real log on a machine
+  with the previous TPM re-enabled.
 - **Not certified.** No TCG, FIPS or Common Criteria certification; do not
   use for production security requirements.
 - **Removing the state is irreversible for sealed data.** Deleting
-  `%ProgramData%\SoftTpm` (or running `uninstall.ps1 -RemoveState`) is
-  equivalent to replacing the TPM chip: BitLocker volumes sealed to it need
-  their recovery keys, and Windows Hello enrollment is lost.
+  `%ProgramData%\SoftTpm` (or running
+  `scripts\uninstall.ps1 -RemoveState`) is equivalent to replacing the TPM
+  chip: BitLocker volumes sealed to it need their recovery keys, and Windows
+  Hello enrollment is lost.
 
 ## Related documents
 
@@ -169,3 +195,4 @@ and install flow.
 - [driver-tpm-interface.md](driver-tpm-interface.md) - the TBS-facing
   interface.
 - [service-protocol.md](service-protocol.md) - driver/service protocol.
+- [testing.md](testing.md) - replay capture, inspection and validation.

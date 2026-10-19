@@ -12,8 +12,7 @@ this script before installing SoftTPM, then copy the captured file to
 into its PCRs and publishes the log as the WBCL.
 
 .EXAMPLE
-.\capture-platform-log.ps1
-.\capture-platform-log.ps1 -OutputPath C:\temp\platform-log.bin
+.\scripts\test-debug.ps1 -Mode Capture -OutputPath C:\temp\platform-log.bin
 #>
 
 [CmdletBinding()]
@@ -30,7 +29,7 @@ if (-not $wbcl)
     throw 'No WBCL registry value found. Boot with the firmware TPM (or firmware vTPM) enabled and run this before installing SoftTPM.'
 }
 
-$headerBytes = @(0, 0, 0, 0, 0, 0, 0, 3)
+$headerBytes = @(0, 0, 0, 0, 3, 0, 0, 0)
 $hasTcgHeader = $true
 for ($i = 0; $i -lt $headerBytes.Count; $i++)
 {
@@ -48,7 +47,7 @@ if (-not $hasTcgHeader)
 
 if (Get-Service -Name SoftTpmService -ErrorAction SilentlyContinue)
 {
-    Write-Warning 'SoftTpmService is installed; if the firmware TPM was disabled, this captures SoftTPM''s synthetic log, not a firmware log. Remove SoftTPM, re-enable the firmware TPM and capture again.'
+    Write-Warning 'SoftTpmService is installed; if the firmware TPM was disabled, this captures SoftTPM''s own published log, not a firmware log. Remove SoftTPM, re-enable the firmware TPM and capture again.'
 }
 
 if ($wbcl.Length -lt 128)

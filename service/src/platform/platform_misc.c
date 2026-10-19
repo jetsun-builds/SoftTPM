@@ -9,9 +9,9 @@
 
 extern int32_t _plat__GetEntropy(unsigned char* entropy, uint32_t amount);
 
-#define SOFTTPM_MANUFACTURER "SFTW"
+#define SOFTTPM_MANUFACTURER "STPM"
 #define SOFTTPM_VENDOR_STRING_1 "Soft"
-#define SOFTTPM_VENDOR_STRING_2 "Tpm "
+#define SOFTTPM_VENDOR_STRING_2 "TPM\0"
 #define SOFTTPM_VENDOR_STRING_3 "\0\0\0\0"
 #define SOFTTPM_VENDOR_STRING_4 "\0\0\0\0"
 #define SOFTTPM_FIRMWARE_V1 0x20260101

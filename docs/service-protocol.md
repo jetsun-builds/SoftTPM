@@ -16,7 +16,7 @@ by both sides. Protocol version: **1**.
 The control device has a stricter ACL than `\??\TPM`: SYSTEM and
 Administrators only (`D:P(A;;GA;;;SY)(A;;GA;;;BA)`).
 
-"Connected" simply means the service holds an open handle to
+"Connected" means the service holds an open handle to
 `\\.\SoftTpmControl`; the driver tracks it via file create/cleanup callbacks.
 There is no login, handshake or version negotiation IOCTL - the service just
 opens the device and starts the loop. The connection is bound to the first
@@ -63,8 +63,8 @@ typedef struct _SOFTTPM_RESPONSE {
 | `IOCTL_SOFTTPM_GET_STATUS` | 0x22C06408 | Output: `SOFTTPM_STATUS` |
 | `IOCTL_SOFTTPM_READ_TRACE` | 0x22C0640C | Output: `SOFTTPM_TRACE_ENTRY[]` |
 
-(The codes are the `CTL_CODE` expressions from the header; use the macros,
-not the raw values.)
+(These are the `CTL_CODE` expressions from the header; use the macros, not
+the raw values.)
 
 ### GET_COMMAND
 
@@ -195,3 +195,12 @@ into the TPM failure response for TBS.
 | Driver restart (unload/reload) | Service loses the control handle, retries until the device is back, reconnects. |
 | Both restart | Same as boot flow; TBS retries `STATUS_DEVICE_NOT_READY` until the service answers. |
 | Machine reboot | State loads from disk; every boot starts a fresh `TPM2_Startup(CLEAR)` (no saved/shutdown state is preserved beyond the NV image). |
+
+## Diagnosing protocol failures
+
+- `scripts/test-debug.ps1 -Mode Trace` prints `GET_STATUS` counters and the
+  driver trace ring, then performs a direct driver round trip bypassing TBS.
+- A rejected response leaves `'RJCT'` (or a header error) in the ring; the
+  service automatically logs the last 8 entries in `softtpm.log`.
+- The status snapshot (`-Mode Status`) shows service state and the tail of
+  the service log.
