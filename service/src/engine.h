@@ -12,4 +12,11 @@ int engine_execute(
     unsigned char* Response,
     uint32_t* ResponseSize);
 
+int engine_execute_locality(
+    const unsigned char* Command,
+    uint32_t CommandSize,
+    uint32_t Locality,
+    unsigned char* Response,
+    uint32_t* ResponseSize);
+
 #endif

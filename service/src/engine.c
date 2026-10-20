@@ -37,14 +37,16 @@ static void SoftTpmSynthesizeFailure(unsigned char* Response, uint32_t* Response
     *ResponseSize = (uint32_t)sizeof(failure);
 }
 
-static int SoftTpmRunCommand(
+static int SoftTpmRunCommandAtLocality(
     const unsigned char* Command,
     uint32_t CommandSize,
+    uint32_t Locality,
     unsigned char* Response,
     uint32_t* ResponseSize)
 {
     unsigned char* responsePointer = s_responseBuffer;
     uint32_t responseSize = sizeof(s_responseBuffer);
+    unsigned char previousLocality;
 
     if (CommandSize > sizeof(s_commandBuffer))
     {
@@ -53,9 +55,25 @@ static int SoftTpmRunCommand(
         return -1;
     }
 
+    if (Locality > SOFTTPM_MAX_LOCALITY)
+    {
+        log_error("engine: unsupported locality %u", Locality);
+        SoftTpmSynthesizeFailure(Response, ResponseSize);
+        return -1;
+    }
+
     memcpy(s_commandBuffer, Command, CommandSize);
 
+    previousLocality = _plat__LocalityGet();
+
+    if (Locality != 0)
+    {
+        log_info("engine: command at locality %u", Locality);
+    }
+
+    _plat__LocalitySet((unsigned char)Locality);
     _plat__RunCommand(CommandSize, s_commandBuffer, &responseSize, &responsePointer);
+    _plat__LocalitySet(previousLocality);
 
     if (responsePointer == NULL || responseSize > sizeof(s_responseBuffer))
     {
@@ -68,6 +86,20 @@ static int SoftTpmRunCommand(
     *ResponseSize = responseSize;
 
     return 0;
+}
+
+static int SoftTpmRunCommand(
+    const unsigned char* Command,
+    uint32_t CommandSize,
+    unsigned char* Response,
+    uint32_t* ResponseSize)
+{
+    return SoftTpmRunCommandAtLocality(
+        Command,
+        CommandSize,
+        0,
+        Response,
+        ResponseSize);
 }
 
 static int SoftTpmStartupClear(void)
@@ -231,6 +263,21 @@ int engine_execute(
     unsigned char* Response,
     uint32_t* ResponseSize)
 {
+    return engine_execute_locality(
+        Command,
+        CommandSize,
+        0,
+        Response,
+        ResponseSize);
+}
+
+int engine_execute_locality(
+    const unsigned char* Command,
+    uint32_t CommandSize,
+    uint32_t Locality,
+    unsigned char* Response,
+    uint32_t* ResponseSize)
+{
     if (Command == NULL || Response == NULL || ResponseSize == NULL)
     {
         return -1;
@@ -248,5 +295,10 @@ int engine_execute(
         return -1;
     }
 
-    return SoftTpmRunCommand(Command, CommandSize, Response, ResponseSize);
+    return SoftTpmRunCommandAtLocality(
+        Command,
+        CommandSize,
+        Locality,
+        Response,
+        ResponseSize);
 }

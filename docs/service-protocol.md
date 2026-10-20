@@ -2,7 +2,9 @@
 
 The contract between `SoftTpmDriver` and `SoftTpmService` lives in one
 header, [`shared/SoftTpmProtocol.h`](../shared/SoftTpmProtocol.h), included
-by both sides. Protocol version: **1**.
+by both sides. Protocol version: **2**. A protocol change requires rebuilding
+and reinstalling both the driver and the service; the harness needs
+`-ReinstallDriver` (plus a reboot if the old image is still loaded).
 
 ## Device and connection model
 
@@ -40,10 +42,15 @@ directions validate `ProtocolVersion` and reject mismatches with
 typedef struct _SOFTTPM_COMMAND {
     ULONG ProtocolVersion;                  /* SOFTTPM_PROTOCOL_VERSION */
     ULONG RequestId;                        /* driver-assigned, per command */
-    ULONG Locality;                         /* always 0 */
-    ULONG CommandSize;
+    ULONG Action;                           /* submit / create key / revoke */
+    ULONG Locality;                         /* 0-4; TBS uses 0 */
+    ULONG CommandSize;                      /* 0 for non-submit actions */
     UCHAR Command[SOFTTPM_MAX_PACKET_SIZE]; /* 4096 */
 } SOFTTPM_COMMAND;
+
+#define SOFTTPM_ACTION_SUBMIT              0
+#define SOFTTPM_ACTION_CREATE_WINDOWS_KEY  1
+#define SOFTTPM_ACTION_REVOKE_ATTESTATION  2
 
 typedef struct _SOFTTPM_RESPONSE {
     ULONG ProtocolVersion;
@@ -68,12 +75,14 @@ the raw values.)
 
 ### GET_COMMAND
 
-Blocks until a TPM command is available, then completes with the command
-payload (`FIELD_OFFSET(..., Command) + CommandSize` bytes). The driver hands
-out the highest-priority command first (the TBS priority byte ordering
+Blocks until a TPM command or action is available, then completes with the
+command payload (`FIELD_OFFSET(..., Command) + CommandSize` bytes). The driver
+hands out the highest-priority item first (the TBS priority byte ordering
 described in
-[driver-tpm-interface.md](driver-tpm-interface.md)), and byte 0 of the
-delivered buffer is already restored to `0x80`.
+[driver-tpm-interface.md](driver-tpm-interface.md)), and byte 0 of a delivered
+TPM command is already restored to `0x80`. Non-submit actions have
+`CommandSize == 0`; their `Action` and `Locality` fields are set by the
+driver.
 
 One command is outstanding system-wide: the driver delivers the head of the
 priority queue and does not deliver another until it is answered, times out,
@@ -108,13 +117,17 @@ Anything else (stale, duplicate, unknown) completes with
 `STATUS_INVALID_PARAMETER` and writes an `'RJCT'` breadcrumb (the current and
 received `RequestId`, plus delivered/completed/connected flags) into the
 trace ring; the TBS request stays pending and fails via the 30-second
-timeout. Successful `SEND_RESPONSE` calls then:
+timeout. Successful `SEND_RESPONSE` calls then branch on the pending action:
 
-- `Status != 0` or `ResponseSize < 10` -> the driver completes the TBS
-  request with the synthesized failure response.
-- Otherwise the TBS request is completed with the exact response bytes, and
-  `CompletedCommandCount`/`LastTpmResponseCode` are updated (big-endian
-  response code from offset 6).
+- `SOFTTPM_ACTION_SUBMIT`: `Status != 0` or `ResponseSize < 10` completes the
+  TBS request with the synthesized failure response; otherwise the TBS
+  request is completed with the exact response bytes. `CompletedCommandCount`
+  and `LastTpmResponseCode` are updated (big-endian response code from
+  offset 6).
+- `SOFTTPM_ACTION_CREATE_WINDOWS_KEY` and
+  `SOFTTPM_ACTION_REVOKE_ATTESTATION`: success requires `Status == 0` and
+  `ResponseSize == 0`; the TBS request completes successfully with zero
+  output bytes. Any other answer completes with `STATUS_UNSUCCESSFUL`.
 
 The service dumps the last 8 trace entries automatically when a
 `SEND_RESPONSE` call fails, which makes a rejection reason visible in
@@ -167,11 +180,11 @@ are recorded for:
 | `SOFTTPM_MAX_PENDING_COMMANDS` | 64 | Queue depth before overflow failures. |
 
 When the timer fires and the command was never delivered (or delivery
-failed), the TBS request is completed with the failure response,
-`TimeoutCount` is incremented, and a trace entry is written. While a
-delivery is momentarily in progress the timer re-arms itself every second
-instead of failing the command, so a slow `GET_COMMAND` completion cannot
-produce a spurious timeout.
+failed), a submit request is completed with the failure response, an action
+request completes with `STATUS_IO_TIMEOUT`, `TimeoutCount` is incremented, and
+a trace entry is written. While a delivery is momentarily in progress the
+timer re-arms itself every second instead of failing the command, so a slow
+`GET_COMMAND` completion cannot produce a spurious timeout.
 
 ## Service behavior
 
@@ -183,9 +196,17 @@ produce a spurious timeout.
 3. On failure: close the handle (driver flushes pending work) and retry
    every 1000 ms. The first failure and every 30th are logged.
 
-`engine_execute` returning non-zero (engine not running, truncated command)
-is answered with `Status = 1` and an empty response; the driver converts that
-into the TPM failure response for TBS.
+For `SOFTTPM_ACTION_SUBMIT`, the service calls
+`engine_execute_locality(command, size, Locality, ...)`; locality 0 is the
+normal TBS path. `engine_execute` returning non-zero (engine not running,
+truncated command) is answered with `Status = 1` and an empty response, which
+the driver converts into the TPM failure response for TBS.
+
+For `SOFTTPM_ACTION_CREATE_WINDOWS_KEY`, the service runs the idempotent
+provisioning pass and answers with `Status = 0` and no data. For
+`SOFTTPM_ACTION_REVOKE_ATTESTATION`, it runs the PCR[12] extend plus event
+counter increment and answers the same way. Unknown actions and actions with
+a non-zero `CommandSize` are rejected with `Status = 1`.
 
 ## Recovery scenarios
 

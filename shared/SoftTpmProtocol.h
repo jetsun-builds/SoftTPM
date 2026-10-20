@@ -10,8 +10,14 @@
  * CTL_CODE and the ULONG/UCHAR types come from those headers.
  */
 
-#define SOFTTPM_PROTOCOL_VERSION 1
+#define SOFTTPM_PROTOCOL_VERSION 2
 #define SOFTTPM_MAX_PACKET_SIZE 4096
+
+#define SOFTTPM_ACTION_SUBMIT 0
+#define SOFTTPM_ACTION_CREATE_WINDOWS_KEY 1
+#define SOFTTPM_ACTION_REVOKE_ATTESTATION 2
+
+#define SOFTTPM_MAX_LOCALITY 4
 
 #define SOFTTPM_CONTROL_DEVICE_NAME L"\\Device\\SoftTpmControl"
 #define SOFTTPM_CONTROL_LINK_NAME L"\\DosDevices\\SoftTpmControl"
@@ -48,6 +54,7 @@
 typedef struct _SOFTTPM_COMMAND {
     ULONG ProtocolVersion;
     ULONG RequestId;
+    ULONG Action;
     ULONG Locality;
     ULONG CommandSize;
     UCHAR Command[SOFTTPM_MAX_PACKET_SIZE];

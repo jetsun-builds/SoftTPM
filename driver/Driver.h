@@ -13,6 +13,8 @@ typedef struct _SOFTTPM_PENDING_COMMAND
     LIST_ENTRY ListEntry;
     WDFREQUEST TbsRequest;
     ULONG RequestId;
+    ULONG Action;
+    ULONG Locality;
     ULONG Priority;
     ULONG RequestLength;
     BOOLEAN Completed;
@@ -57,6 +59,10 @@ PSOFTTPM_GLOBAL_STATE SoftTpmGetGlobalState(void);
 VOID SoftTpmDebugRecord(PCSTR Name, ULONG Value);
 
 VOID SoftTpmErrorRecord(ULONG Step, NTSTATUS Status);
+
+NTSTATUS SoftTpmRegistryReadDword(PCWSTR ValueName, PULONG Value);
+
+NTSTATUS SoftTpmRegistryWriteDword(PCWSTR ValueName, ULONG Value);
 
 EVT_WDF_DRIVER_DEVICE_ADD SoftTpmEvtDeviceAdd;
 EVT_WDF_DRIVER_UNLOAD SoftTpmEvtDriverUnload;

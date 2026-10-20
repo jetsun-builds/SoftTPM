@@ -36,10 +36,14 @@ static NTSTATUS SoftTpmCompleteGetCommandRequest(
     output = (PSOFTTPM_COMMAND)buffer;
     output->ProtocolVersion = SOFTTPM_PROTOCOL_VERSION;
     output->RequestId = Command->RequestId;
-    output->Locality = 0;
+    output->Action = Command->Action;
+    output->Locality = Command->Locality;
     output->CommandSize = Command->RequestLength;
 
-    RtlCopyMemory(output->Command, Command->Request, Command->RequestLength);
+    if (Command->RequestLength > 0)
+    {
+        RtlCopyMemory(output->Command, Command->Request, Command->RequestLength);
+    }
 
     WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, required);
     return STATUS_SUCCESS;
@@ -70,9 +74,26 @@ VOID SoftTpmCompleteTbsFailure(WDFREQUEST Request)
         SOFTTPM_FAILURE_RESPONSE_SIZE);
 }
 
+VOID SoftTpmCompleteRequestFailure(
+    WDFREQUEST Request,
+    ULONG Action,
+    NTSTATUS Status)
+{
+    if (Action == SOFTTPM_ACTION_SUBMIT)
+    {
+        SoftTpmCompleteTbsFailure(Request);
+    }
+    else
+    {
+        WdfRequestComplete(Request, Status);
+    }
+}
+
 VOID SoftTpmServiceLinkEnqueueCommand(
     PSOFTTPM_GLOBAL_STATE State,
     WDFREQUEST TbsRequest,
+    ULONG Action,
+    ULONG Locality,
     PUCHAR Command,
     ULONG CommandLength,
     ULONG Priority)
@@ -89,17 +110,25 @@ VOID SoftTpmServiceLinkEnqueueCommand(
 
     if (entry == NULL)
     {
-        SoftTpmCompleteTbsFailure(TbsRequest);
+        SoftTpmCompleteRequestFailure(
+            TbsRequest,
+            Action,
+            STATUS_INSUFFICIENT_RESOURCES);
         return;
     }
 
     RtlZeroMemory(entry, sizeof(*entry));
     entry->TbsRequest = TbsRequest;
+    entry->Action = Action;
+    entry->Locality = Locality;
     entry->Priority = Priority;
     entry->RequestLength = CommandLength;
 
-    RtlCopyMemory(entry->Request, Command, CommandLength);
-    entry->Request[0] = 0x80;
+    if (CommandLength > 0 && Command != NULL)
+    {
+        RtlCopyMemory(entry->Request, Command, CommandLength);
+        entry->Request[0] = 0x80;
+    }
 
     WdfWaitLockAcquire(State->Lock, NULL);
 
@@ -109,7 +138,10 @@ VOID SoftTpmServiceLinkEnqueueCommand(
     {
         WdfWaitLockRelease(State->Lock);
         ExFreePoolWithTag(entry, SOFTTPM_POOL_TAG);
-        SoftTpmCompleteTbsFailure(TbsRequest);
+        SoftTpmCompleteRequestFailure(
+            TbsRequest,
+            Action,
+            STATUS_INSUFFICIENT_RESOURCES);
         return;
     }
 
@@ -348,18 +380,36 @@ VOID SoftTpmServiceLinkAcceptResponse(PSOFTTPM_GLOBAL_STATE State, WDFREQUEST Re
         WdfTimerStop(State->TimeoutTimer, TRUE);
     }
 
-    if (response->Status == 0 && response->ResponseSize >= 10)
+    if (current->Action == SOFTTPM_ACTION_SUBMIT)
     {
-        responseCode = SoftTpmReadBigEndian32(response->Response + 6);
-        SoftTpmCompleteTbsResponse(
-            current->TbsRequest,
-            response->Response,
-            response->ResponseSize);
+        if (response->Status == 0 && response->ResponseSize >= 10)
+        {
+            responseCode = SoftTpmReadBigEndian32(response->Response + 6);
+            SoftTpmCompleteTbsResponse(
+                current->TbsRequest,
+                response->Response,
+                response->ResponseSize);
+        }
+        else
+        {
+            responseCode = 0x00000101;
+            SoftTpmCompleteTbsFailure(current->TbsRequest);
+        }
     }
     else
     {
-        responseCode = 0x00000101;
-        SoftTpmCompleteTbsFailure(current->TbsRequest);
+        if (response->Status == 0 && response->ResponseSize == 0)
+        {
+            WdfRequestCompleteWithInformation(
+                current->TbsRequest,
+                STATUS_SUCCESS,
+                0);
+        }
+        else
+        {
+            responseCode = 0x00000101;
+            WdfRequestComplete(current->TbsRequest, STATUS_UNSUCCESSFUL);
+        }
     }
 
     WdfWaitLockAcquire(State->Lock, NULL);

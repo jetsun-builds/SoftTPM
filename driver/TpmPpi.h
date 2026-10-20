@@ -5,4 +5,6 @@
 
 VOID SoftTpmTpmPpiCommand(PSOFTTPM_GLOBAL_STATE State, WDFREQUEST Request);
 
+VOID SoftTpmPpiInitialize(void);
+
 #endif

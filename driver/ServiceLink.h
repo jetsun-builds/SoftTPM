@@ -6,6 +6,8 @@
 VOID SoftTpmServiceLinkEnqueueCommand(
     PSOFTTPM_GLOBAL_STATE State,
     WDFREQUEST TbsRequest,
+    ULONG Action,
+    ULONG Locality,
     PUCHAR Command,
     ULONG CommandLength,
     ULONG Priority);
@@ -42,6 +44,11 @@ VOID SoftTpmTraceAdd(
 VOID SoftTpmCompleteTbsResponse(WDFREQUEST Request, PUCHAR Response, ULONG ResponseLength);
 
 VOID SoftTpmCompleteTbsFailure(WDFREQUEST Request);
+
+VOID SoftTpmCompleteRequestFailure(
+    WDFREQUEST Request,
+    ULONG Action,
+    NTSTATUS Status);
 
 EVT_WDF_TIMER SoftTpmEvtTimeoutTimer;
 

@@ -10,14 +10,32 @@
 
 #define SOFTTPM_PROVISION_BUFFER_SIZE 4096
 #define SOFTTPM_TPM_RC_NV_DEFINED 0x14C
+#define SOFTTPM_TPM_RC_RETRY 0x922
+#define SOFTTPM_PROVISION_RETRY_LIMIT 3
 #define SOFTTPM_PUBLIC_BLOB_MAX 512
 #define SOFTTPM_EK_OBJECT_ATTRIBUTES 0x000300B2
 #define SOFTTPM_SRK_OBJECT_ATTRIBUTES 0x00030472
+#define SOFTTPM_ATTESTATION_PCR 12
 
 static const unsigned char s_ekAuthPolicy[32] = {
     0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xb3, 0xf8, 0x1a, 0x90, 0xcc, 0x8d,
     0x46, 0xa5, 0xd7, 0x24, 0xfd, 0x52, 0xd7, 0x6e, 0x06, 0x52, 0x0b, 0x64,
     0xf2, 0xa1, 0xda, 0x1b, 0x33, 0x14, 0x69, 0xaa};
+
+static const unsigned char s_revocationDigests[] = {
+    0x00, 0x00, 0x00, 0x03, 0x00, 0x0b, 0xe0, 0xb7, 0x82, 0x49, 0xad, 0x0a,
+    0x7e, 0x65, 0x57, 0x63, 0x03, 0xe0, 0x96, 0x31, 0xeb, 0x26, 0x0c, 0xb1,
+    0x1a, 0x97, 0xf8, 0x61, 0x5d, 0x07, 0xb7, 0xdf, 0x76, 0xc7, 0x4f, 0xe5,
+    0xfe, 0x79, 0x00, 0x0c, 0x97, 0x08, 0x1f, 0x44, 0xe3, 0x1d, 0xf4, 0x8f,
+    0xb7, 0xf6, 0xd9, 0x8a, 0xf6, 0xe2, 0xec, 0xcb, 0x7d, 0x20, 0xc1, 0xcd,
+    0xa7, 0xf3, 0x1a, 0x5c, 0x7d, 0xa8, 0x80, 0x16, 0xcb, 0xe5, 0xa2, 0x0c,
+    0x6c, 0x74, 0x76, 0xf2, 0x88, 0xe7, 0x2b, 0x68, 0x0e, 0x67, 0x15, 0x1c,
+    0x28, 0xa1, 0x6a, 0xc4, 0x00, 0x0d, 0x6b, 0x51, 0x9d, 0xfc, 0x1f, 0x3a,
+    0x06, 0x86, 0x8a, 0x58, 0x57, 0xe8, 0xc6, 0xc8, 0x15, 0x37, 0xd4, 0xf7,
+    0xd7, 0x57, 0xb3, 0x5b, 0x3c, 0xcc, 0x04, 0xc2, 0xec, 0x96, 0x51, 0x3b,
+    0xe7, 0x4d, 0x3b, 0x58, 0x26, 0x09, 0x3d, 0x15, 0xa0, 0xe1, 0xc0, 0x43,
+    0x58, 0x13, 0x4f, 0x7f, 0x5f, 0xd0, 0x99, 0x9b, 0xa9, 0xac, 0x1e, 0x47,
+    0x9a, 0x83, 0x98, 0x19, 0xfe, 0x90, 0x10, 0xbf, 0xc5, 0xe0};
 
 static uint16_t SoftTpmBe16(const unsigned char* Buffer)
 {
@@ -81,12 +99,26 @@ static int SoftTpmRunProvisionCommand(
     const char* What)
 {
     uint32_t responseCode = 0;
+    uint32_t responseCapacity = *ResponseSize;
+    unsigned int attempt;
 
-    if (SoftTpmRunCommandQuiet(
-            Command, CommandSize, Response, ResponseSize, &responseCode) != 0)
+    for (attempt = 0; attempt < SOFTTPM_PROVISION_RETRY_LIMIT; attempt++)
     {
-        log_error("provision: %s did not run", What);
-        return -1;
+        *ResponseSize = responseCapacity;
+
+        if (SoftTpmRunCommandQuiet(
+                Command, CommandSize, Response, ResponseSize, &responseCode) != 0)
+        {
+            log_error("provision: %s did not run", What);
+            return -1;
+        }
+
+        if (responseCode != SOFTTPM_TPM_RC_RETRY)
+        {
+            break;
+        }
+
+        log_info("provision: %s returned TPM_RC_RETRY, retrying", What);
     }
 
     if (responseCode != SOFTTPM_TPM_RC_SUCCESS)
@@ -392,6 +424,140 @@ static int SoftTpmWriteEkCertificate(
     return 0;
 }
 
+static int SoftTpmEnsureAttestationCounter(void)
+{
+    unsigned char command[128];
+    unsigned char response[SOFTTPM_PROVISION_BUFFER_SIZE];
+    uint32_t commandSize;
+    uint32_t responseSize;
+    uint32_t responseCode = 0;
+    int present;
+    int ppWasOn;
+    int result = -1;
+
+    present = SoftTpmProbeNvIndex(SOFTTPM_ATTESTATION_COUNTER_NV_INDEX);
+
+    if (present > 0)
+    {
+        return 0;
+    }
+
+    if (present < 0)
+    {
+        return -1;
+    }
+
+    ppWasOn = _plat__PhysicalPresenceAsserted();
+
+    if (!ppWasOn)
+    {
+        _plat__Signal_PhysicalPresenceOn();
+    }
+
+    commandSize = tpm_build_nv_define_space(
+        SOFTTPM_TPM_RH_PLATFORM,
+        SOFTTPM_ATTESTATION_COUNTER_NV_INDEX,
+        SOFTTPM_TPM_ALG_SHA256,
+        SOFTTPM_ATTESTATION_COUNTER_NV_ATTRIBUTES,
+        8,
+        command,
+        sizeof(command));
+
+    if (commandSize == 0)
+    {
+        goto cleanup;
+    }
+
+    responseSize = sizeof(response);
+
+    if (SoftTpmRunCommandQuiet(
+            command,
+            commandSize,
+            response,
+            &responseSize,
+            &responseCode) != 0)
+    {
+        goto cleanup;
+    }
+
+    if (responseCode == SOFTTPM_TPM_RC_SUCCESS
+        || (responseCode & 0xFFF) == SOFTTPM_TPM_RC_NV_DEFINED)
+    {
+        result = 0;
+    }
+    else
+    {
+        log_warn(
+            "provision: attestation counter definition failed with TPM_RC 0x%08X",
+            responseCode);
+    }
+
+cleanup:
+    if (!ppWasOn)
+    {
+        _plat__Signal_PhysicalPresenceOff();
+    }
+
+    return result;
+}
+
+int provision_revoke_attestation(void)
+{
+    unsigned char command[SOFTTPM_PROVISION_BUFFER_SIZE];
+    unsigned char response[SOFTTPM_PROVISION_BUFFER_SIZE];
+    uint32_t commandSize;
+    uint32_t responseSize;
+
+    if (SoftTpmEnsureAttestationCounter() != 0)
+    {
+        return -1;
+    }
+
+    commandSize = tpm_build_pcr_extend(
+        SOFTTPM_ATTESTATION_PCR,
+        s_revocationDigests,
+        (uint32_t)sizeof(s_revocationDigests),
+        command,
+        sizeof(command));
+
+    if (commandSize == 0)
+    {
+        return -1;
+    }
+
+    responseSize = sizeof(response);
+
+    if (SoftTpmRunProvisionCommand(
+            command,
+            commandSize,
+            response,
+            &responseSize,
+            "PCR_Extend(PCR[12])") != 0)
+    {
+        return -1;
+    }
+
+    commandSize = tpm_build_nv_increment(
+        SOFTTPM_ATTESTATION_COUNTER_NV_INDEX,
+        SOFTTPM_ATTESTATION_COUNTER_NV_INDEX,
+        command,
+        sizeof(command));
+
+    if (commandSize == 0)
+    {
+        return -1;
+    }
+
+    responseSize = sizeof(response);
+
+    return SoftTpmRunProvisionCommand(
+        command,
+        commandSize,
+        response,
+        &responseSize,
+        "NV_Increment(attestation counter)");
+}
+
 int provision_run(const wchar_t* StateDirectory)
 {
     unsigned char publicArea[128];
@@ -401,6 +567,7 @@ int provision_run(const wchar_t* StateDirectory)
     int hasEk;
     int hasSrk;
     int hasCertificate;
+    int ppWasOn;
     int result = -1;
 
     if (StateDirectory == NULL)
@@ -410,7 +577,12 @@ int provision_run(const wchar_t* StateDirectory)
 
     log_info("provision: checking persistent objects");
 
-    _plat__Signal_PhysicalPresenceOn();
+    ppWasOn = _plat__PhysicalPresenceAsserted();
+
+    if (!ppWasOn)
+    {
+        _plat__Signal_PhysicalPresenceOn();
+    }
 
     hasEk = SoftTpmProbeHandle(SOFTTPM_EK_PERSISTENT_HANDLE);
     hasSrk = SoftTpmProbeHandle(SOFTTPM_SRK_PERSISTENT_HANDLE);
@@ -535,10 +707,19 @@ int provision_run(const wchar_t* StateDirectory)
         }
     }
 
+    if (SoftTpmEnsureAttestationCounter() != 0)
+    {
+        goto cleanup;
+    }
+
     result = 0;
     log_info("provision: TPM objects are ready");
 
 cleanup:
-    _plat__Signal_PhysicalPresenceOff();
+    if (!ppWasOn)
+    {
+        _plat__Signal_PhysicalPresenceOff();
+    }
+
     return result;
 }

@@ -26,7 +26,7 @@ Modes:
 .\scripts\test-debug.ps1
 
 .EXAMPLE
-.\scripts\test-debug.ps1 -Mode Full -ReinstallDriver -AttestationTest
+.\scripts\test-debug.ps1 -Mode Full -ReinstallDriver -AttestationTest -ActionTest -LocalityTest
 
 .EXAMPLE
 .\scripts\test-debug.ps1 -Mode Inspect -Path C:\temp\platform-log.bin
@@ -53,6 +53,8 @@ param(
     [switch]$ConsoleDebug,
     [switch]$ReinstallDriver,
     [switch]$AttestationTest,
+    [switch]$ActionTest,
+    [switch]$LocalityTest,
 
     [string]$OutputPath = (Join-Path $env:ProgramData 'SoftTpm\platform-log.bin'),
     [string[]]$Path,
@@ -177,6 +179,8 @@ switch ($Mode)
             ConsoleDebug = $ConsoleDebug
             ReinstallDriver = $ReinstallDriver
             AttestationTest = $AttestationTest
+            ActionTest = $ActionTest
+            LocalityTest = $LocalityTest
         }
         if ($OpenSslRoot) { $arguments.OpenSslRoot = $OpenSslRoot }
         $global:LASTEXITCODE = 0

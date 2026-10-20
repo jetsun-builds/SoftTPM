@@ -33,11 +33,12 @@ tbs.sys builds every IOCTL with DeviceType `FILE_DEVICE_UNKNOWN` (0x22) and
 | `0x22C004` | `Tbsip_Cancel_Commands` | Success, no data. The SoftTPM submit path is synchronous, so there is nothing to cancel. |
 | `0x22C00C` | `Tbsip_Submit_Command` | Executes a TPM 2.0 command (below). |
 | `0x22C014` | `Tbsi_Physical_Presence_Command` | Synthetic PPI responder (below). |
+| `0x22C018` | `Tbsi_Revoke_Attestation` | Extends PCR[12] and increments the SoftTPM event counter (below). |
 | `0x22C01C` | `Tbsi_GetDeviceInfo` | Returns the 16-byte device info (below). |
 | `0x22C194` | `Tbsip_Submit_Command_NonBlocking` | Same handler as 0x22C00C; tpm.sys routes both codes to the same function. |
 | `0x22C198` | `Tbsip_TestMorBit` | Returns a zero DWORD (memory overwrite request not armed). |
+| `0x22C19C` | `Tbsi_Create_Windows_Key` | Validates the key handle and runs provisioning (below). |
 | `0x22C1A0` | `Tbsip_TestInterruptInformation` | Returns a zero DWORD (a virtual TPM exposes no interrupt data). |
-| `0x22C19C` | `Tbsi_Create_Windows_Key` | Not implemented; falls into the unknown-IOCTL path. |
 
 ## IOCTL_TPM_SUBMIT_COMMAND
 
@@ -75,6 +76,65 @@ Semantics:
   `STATUS_INVALID_PARAMETER` / `STATUS_INVALID_BUFFER_SIZE`.
 - If no service is connected, the request fails immediately with
   `STATUS_DEVICE_NOT_READY` (TBS retries).
+
+## IOCTL_TPM_CREATE_WINDOWS_KEY
+
+```
+CTL_CODE(0x22, 0x67, METHOD_BUFFERED, FILE_READ_DATA|FILE_WRITE_DATA) = 0x22C19C
+```
+
+`Tbsi_Create_Windows_Key` sends a 4-byte key handle and expects no output.
+SoftTPM accepts the two handles Windows uses and maps the call to the
+provisioning action:
+
+- `0x81000001` (SRK) and `0x81010001` (EK) are accepted.
+- Any other handle is rejected with `STATUS_INVALID_PARAMETER`.
+- The service runs the same idempotent `provision_run` pass used at startup,
+  creating the EK/SRK and the EK certificate if needed.
+- Success completes with zero output bytes; provisioning failure or a
+  disconnected service is reported as an I/O error to TBS.
+
+## IOCTL_TPM_REVOKE_ATTESTATION
+
+```
+CTL_CODE(0x22, 6, METHOD_BUFFERED, FILE_READ_DATA|FILE_WRITE_DATA) = 0x22C018
+```
+
+`Tbsi_Revoke_Attestation` has no input and no output. The service performs:
+
+1. `TPM2_PCR_Extend` on PCR[12] with fixed SHA-256, SHA-384 and SHA-512
+   digests.
+2. `TPM2_NV_Increment` on the SoftTPM attestation counter at NV index
+   `0x01400010` (counter type, empty index auth, platform-created).
+
+Success requires both commands to succeed; otherwise TBS receives an I/O
+error. The NV counter is SoftTPM's own monotonic counter, not the
+`tpm.sys`-managed event counter, so Windows' WBCL event-count field does not
+change. This is the software-TPM limitation of the revoke path.
+
+## Private locality submit
+
+```
+CTL_CODE(0x22, 0x69, METHOD_BUFFERED, FILE_READ_DATA|FILE_WRITE_DATA) = 0x22C1A4
+```
+
+This is a SoftTPM-only test interface, not a TBS IOCTL. It carries the
+locality that the standard submit IOCTL cannot express:
+
+```c
+typedef struct _SOFTTPM_TPM_LOCALITY_INPUT {
+    ULONG Locality;                 /* 0-4 */
+    ULONG Priority;                 /* 0x64, 0xC8, 0x12C or 0x190 */
+    UCHAR Command[4096];            /* complete TPM 2.0 command */
+} SOFTTPM_TPM_LOCALITY_INPUT;
+```
+
+The input length is the 8-byte header plus the TPM command. Locality values
+above 4, commands shorter than 10 bytes, and commands larger than 4096 bytes
+are rejected with `STATUS_INVALID_PARAMETER`. The response is the raw TPM
+response, exactly like the TBS submit path. The service temporarily sets
+`_plat__LocalitySet(Locality)` around `_plat__RunCommand` and restores the
+previous locality afterward.
 
 ## IOCTL_TPM_GET_DEVICE_INFO
 
@@ -121,14 +181,18 @@ platform firmware returns (cf. coreboot `src/drivers/tpm/ppi.c`):
 Function 6 (deprecated language selection) and function 0 (the ACPI query
 function) are rejected with `STATUS_INVALID_PARAMETER`, matching what tpm.sys
 forwards. Operations submitted through function 2/7 are recorded and reported
-back through function 3 until the driver reloads; SoftTPM has no pre-OS
-component, so a submitted operation is never actually applied.
+back through function 3. The pending operation and argument are stored as
+`PpiPendingOperation` and `PpiPendingArgument` DWORDs in the driver service
+key, so they survive a driver reload. SoftTPM has no pre-OS component, so a
+submitted operation is persisted and reported, never actually applied.
 
 ## Failure responses
 
-For timeouts, disconnects, queue overflow and malformed service answers, the
-driver completes the TBS request with this canonical 10-byte TPM response
-instead of an I/O error:
+For TPM submit timeouts, disconnects, queue overflow and malformed service
+answers, the driver completes the TBS request with this canonical 10-byte TPM
+response instead of an I/O error. Action requests (create/revoke) have no TPM
+response body and instead complete with the corresponding I/O status, such as
+`STATUS_IO_TIMEOUT` or `STATUS_DEVICE_NOT_READY`:
 
 ```
 80 01 00 00 00 0A 00 00 01 01
@@ -167,16 +231,22 @@ and `scripts/test-debug.ps1 -Mode Trace` prints the ring on demand.
 
 ## Locality
 
-The TBS submit IOCTL does not carry a TPM locality in this protocol. All
-commands execute at locality 0 (`SOFTTPM_COMMAND.Locality` is always 0).
-Requests that require locality != 0 (some `PolicyLocality` flows) cannot be
-satisfied. This is a documented limitation; see
-[attestation-and-limits.md](attestation-and-limits.md).
+`Tbsip_Submit_Command` takes a locality parameter, but `tbs.dll` rejects any
+value other than 0 before it builds the submit IOCTL, and the IOCTL input has
+no locality field. Normal TBS traffic therefore executes at locality 0. The
+private `0x22C1A4` IOCTL above accepts localities 0-4 and is intended for
+tests and diagnostics; it is not reachable through Windows TBS or the standard
+`Tbsi_*` APIs. Policies that require a non-zero locality through TBS still
+cannot be satisfied; see [attestation-and-limits.md](attestation-and-limits.md).
 
 ## Lifecycle and cleanup
 
-- On driver unload or device teardown, all pending and in-flight commands are
-  completed with the failure response so no caller is left hanging.
+- On service disconnect, pending and in-flight commands are completed with the
+  failure response; pending create/revoke actions complete with
+  `STATUS_DEVICE_NOT_READY`.
+- On device teardown, the driver releases its own tracking entries; the
+  outstanding requests remain owned by WDF and are completed or canceled as
+  the device queues are torn down.
 - A TBS handle closing (file cleanup) releases only that file's requests; the
   device itself lives until the driver unloads.
 - While a previous driver image is still loaded, Windows cannot replace the

@@ -31,11 +31,41 @@
    presence confirmation before applying it at the next boot. */
 #define SOFTTPM_PPI_RET_ALLOWED_WITH_PP 3
 
-/* Operations submitted through function 2/7, reported back through function 3
-   until the driver reloads. There is no pre-OS component that could apply
-   them, so only the reporting needs to be consistent. */
+/* Operations submitted through function 2/7, reported back through function 3.
+   There is no pre-OS component that could apply them, so the pending request
+   is persisted in the driver service key and restored after a reload. */
 static ULONG SoftTpmPpiPendingOperation;
 static ULONG SoftTpmPpiPendingArgument;
+
+#define SOFTTPM_PPI_PENDING_OPERATION_VALUE L"PpiPendingOperation"
+#define SOFTTPM_PPI_PENDING_ARGUMENT_VALUE L"PpiPendingArgument"
+
+VOID SoftTpmPpiInitialize(void)
+{
+    ULONG value;
+
+    if (NT_SUCCESS(SoftTpmRegistryReadDword(
+            SOFTTPM_PPI_PENDING_OPERATION_VALUE, &value)))
+    {
+        SoftTpmPpiPendingOperation = value;
+    }
+
+    if (NT_SUCCESS(SoftTpmRegistryReadDword(
+            SOFTTPM_PPI_PENDING_ARGUMENT_VALUE, &value)))
+    {
+        SoftTpmPpiPendingArgument = value;
+    }
+}
+
+static VOID SoftTpmPpiPersist(void)
+{
+    SoftTpmRegistryWriteDword(
+        SOFTTPM_PPI_PENDING_OPERATION_VALUE,
+        SoftTpmPpiPendingOperation);
+    SoftTpmRegistryWriteDword(
+        SOFTTPM_PPI_PENDING_ARGUMENT_VALUE,
+        SoftTpmPpiPendingArgument);
+}
 
 static NTSTATUS SoftTpmPpiBuildResponse(
     const ULONG* Input,
@@ -68,6 +98,8 @@ static NTSTATUS SoftTpmPpiBuildResponse(
         {
             SoftTpmPpiPendingArgument = Input[2];
         }
+
+        SoftTpmPpiPersist();
 
         Payload[0] = SOFTTPM_PPI_RET_SUCCESS;
         *PayloadSize = sizeof(ULONG);
@@ -153,6 +185,17 @@ VOID SoftTpmTpmPpiCommand(PSOFTTPM_GLOBAL_STATE State, WDFREQUEST Request)
         status = STATUS_BUFFER_TOO_SMALL;
     }
 
+    if (inputBuffer != NULL)
+    {
+        SoftTpmTraceAdd(
+            State,
+            SOFTTPM_IOCTL_TPM_PPI_COMMAND,
+            (const UCHAR*)inputBuffer,
+            (ULONG)inputLength,
+            (ULONG)outputLength,
+            (ULONG)status);
+    }
+
     if (NT_SUCCESS(status))
     {
         copySize = payloadSize < outputLength ? payloadSize : outputLength;
@@ -165,16 +208,5 @@ VOID SoftTpmTpmPpiCommand(PSOFTTPM_GLOBAL_STATE State, WDFREQUEST Request)
     else
     {
         WdfRequestComplete(Request, status);
-    }
-
-    if (inputBuffer != NULL)
-    {
-        SoftTpmTraceAdd(
-            State,
-            SOFTTPM_IOCTL_TPM_PPI_COMMAND,
-            (const UCHAR*)inputBuffer,
-            (ULONG)inputLength,
-            (ULONG)outputLength,
-            (ULONG)status);
     }
 }

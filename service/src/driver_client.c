@@ -5,6 +5,7 @@
 #include "driver_client.h"
 #include "engine.h"
 #include "log.h"
+#include "provision/provision.h"
 #include "SoftTpmProtocol.h"
 
 #define SOFTTPM_RECONNECT_DELAY_MS 1000
@@ -189,7 +190,10 @@ static uint32_t SoftTpmReadBigEndian32(const unsigned char* Data)
         | (uint32_t)Data[3];
 }
 
-static int SoftTpmAnswerCommand(HANDLE Device, const SOFTTPM_COMMAND* Command)
+static int SoftTpmAnswerCommand(
+    HANDLE Device,
+    const SOFTTPM_OPTIONS* Options,
+    const SOFTTPM_COMMAND* Command)
 {
     unsigned char response[SOFTTPM_MAX_PACKET_SIZE];
     uint32_t responseSize = sizeof(response);
@@ -197,41 +201,85 @@ static int SoftTpmAnswerCommand(HANDLE Device, const SOFTTPM_COMMAND* Command)
     uint32_t responseCode = 0;
     int rc;
 
-    if (Command->CommandSize >= 10)
+    if (Command->Action == SOFTTPM_ACTION_SUBMIT)
     {
+        if (Command->CommandSize < 10)
+        {
+            log_warn("driver: engine rejected a %u byte command", Command->CommandSize);
+            return SoftTpmSendResponse(Device, Command, 1, NULL, 0);
+        }
+
         commandCode = SoftTpmReadBigEndian32(&Command->Command[6]);
-    }
+        rc = engine_execute_locality(
+            Command->Command,
+            Command->CommandSize,
+            Command->Locality,
+            response,
+            &responseSize);
 
-    rc = engine_execute(Command->Command, Command->CommandSize, response, &responseSize);
-
-    if (rc != 0)
-    {
-        if (Command->CommandSize >= 10)
+        if (rc != 0)
         {
             log_warn("driver: engine failed command 0x%08X (size %u)",
                      commandCode,
                      Command->CommandSize);
-        }
-        else
-        {
-            log_warn("driver: engine rejected a %u byte command", Command->CommandSize);
+            return SoftTpmSendResponse(Device, Command, 1, NULL, 0);
         }
 
+        if (responseSize >= 10)
+        {
+            responseCode = SoftTpmReadBigEndian32(&response[6]);
+        }
+
+        log_debug("tbs: cmd 0x%08X (%u bytes, locality %u) -> 0x%08X (%u bytes)",
+                  commandCode,
+                  Command->CommandSize,
+                  Command->Locality,
+                  responseCode,
+                  responseSize);
+
+        return SoftTpmSendResponse(Device, Command, 0, response, responseSize);
+    }
+
+    if (Command->CommandSize != 0)
+    {
+        log_warn("driver: action %u carried a %u byte command",
+                 Command->Action,
+                 Command->CommandSize);
         return SoftTpmSendResponse(Device, Command, 1, NULL, 0);
     }
 
-    if (responseSize >= 10)
+    if (Command->Action == SOFTTPM_ACTION_CREATE_WINDOWS_KEY)
     {
-        responseCode = SoftTpmReadBigEndian32(&response[6]);
+        if (Options == NULL || provision_run(Options->StateDirectory) != 0)
+        {
+            log_warn("driver: create-windows-key action failed");
+            return SoftTpmSendResponse(Device, Command, 1, NULL, 0);
+        }
+
+        log_info("driver: create-windows-key action completed");
+        return SoftTpmSendResponse(Device, Command, 0, NULL, 0);
     }
 
-    log_debug("tbs: cmd 0x%08X (%u bytes) -> 0x%08X (%u bytes)",
-              commandCode, Command->CommandSize, responseCode, responseSize);
+    if (Command->Action == SOFTTPM_ACTION_REVOKE_ATTESTATION)
+    {
+        if (provision_revoke_attestation() != 0)
+        {
+            log_warn("driver: revoke-attestation action failed");
+            return SoftTpmSendResponse(Device, Command, 1, NULL, 0);
+        }
 
-    return SoftTpmSendResponse(Device, Command, 0, response, responseSize);
+        log_info("driver: revoke-attestation action completed");
+        return SoftTpmSendResponse(Device, Command, 0, NULL, 0);
+    }
+
+    log_warn("driver: unsupported action %u", Command->Action);
+    return SoftTpmSendResponse(Device, Command, 1, NULL, 0);
 }
 
-static int SoftTpmServeDevice(HANDLE Device, HANDLE StopEvent)
+static int SoftTpmServeDevice(
+    HANDLE Device,
+    HANDLE StopEvent,
+    const SOFTTPM_OPTIONS* Options)
 {
     SOFTTPM_COMMAND* command = (SOFTTPM_COMMAND*)malloc(sizeof(SOFTTPM_COMMAND));
 
@@ -261,12 +309,18 @@ static int SoftTpmServeDevice(HANDLE Device, HANDLE StopEvent)
             || command->ProtocolVersion != SOFTTPM_PROTOCOL_VERSION
             || command->CommandSize > SOFTTPM_MAX_PACKET_SIZE)
         {
-            log_warn("driver: invalid GET_COMMAND payload (%lu bytes)", bytesReturned);
+            log_warn(
+                "driver: invalid GET_COMMAND payload (%lu bytes, version %lu, action %lu, locality %lu, command %lu)",
+                bytesReturned,
+                command->ProtocolVersion,
+                command->Action,
+                command->Locality,
+                command->CommandSize);
             free(command);
             return -1;
         }
 
-        if (SoftTpmAnswerCommand(Device, command) != 0)
+        if (SoftTpmAnswerCommand(Device, Options, command) != 0)
         {
             free(command);
             return -1;
@@ -278,8 +332,6 @@ int driver_client_run(const SOFTTPM_OPTIONS* Options, HANDLE StopEvent)
 {
     int failureCount = 0;
     int connected = 0;
-
-    (void)Options;
 
     for (;;)
     {
@@ -311,7 +363,7 @@ int driver_client_run(const SOFTTPM_OPTIONS* Options, HANDLE StopEvent)
             connected = 1;
         }
 
-        if (SoftTpmServeDevice(device, StopEvent) == 0)
+        if (SoftTpmServeDevice(device, StopEvent, Options) == 0)
         {
             CloseHandle(device);
             return 0;

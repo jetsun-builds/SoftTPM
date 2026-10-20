@@ -11,6 +11,7 @@ idempotently on first start and leaves them alone afterwards.
 | EK | RSA 2048, restricted decryption key, attributes `0x000300B2` (fixed TPM + fixed parent + sensitive data origin + restricted + decrypt + admin-with-NV). Created with `TPM2_CreatePrimary` under the endorsement hierarchy (empty password auth), then persisted with `TPM2_EvictControl` to handle `0x81010001` (the TCG EK handle Windows probes). |
 | SRK | RSA 2048, restricted decryption key, attributes `0x00030472` (fixed TPM + fixed parent + sensitive data origin + restricted + decrypt). Created under the owner hierarchy and persisted to `0x81000001`, the SRK handle Windows uses. |
 | EK certificate | Written to NV index `0x01C00002` (the standard TCG EK certificate index) with attributes `PPWRITE | OWNERREAD | AUTHREAD | PLATFORMCREATE`. Authorization is the platform auth (the NV index requires physical presence to define/write). The write is chunked at 1024 bytes per `TPM2_NV_Write` call. |
+| Attestation counter | NV counter at `0x01400010`, defined with `AUTHWRITE | OWNERREAD | AUTHREAD | NT_COUNTER | PLATFORMCREATE` (empty index auth). It is incremented by the revoke action; TBS has no dedicated API for it. |
 
 The EK certificate is issued by a local CA that SoftTPM generates on first
 provision (`ek-ca.pem` in the state directory, RSA 2048/SHA-256). The leaf
@@ -30,12 +31,41 @@ Provisioning details worth knowing:
   queries, `Get-Tpm`) still work, but attestation-related features see a
   TPM without an EK certificate.
 
+## Attestation revocation
+
+`Tbsi_Revoke_Attestation` (TBS IOCTL `0x22C018`) reaches the service as an
+action. The service extends PCR[12] with fixed SHA-256, SHA-384 and SHA-512
+digests and increments the SoftTPM attestation counter at NV index
+`0x01400010`. Both commands must succeed for the IOCTL to succeed.
+
+This is a local software-TPM implementation of the two effects Windows
+documents for the API. Microsoft does not publish the counter index used by
+`tpm.sys`, so SoftTPM uses its own index; the counter is not the event counter
+tracked by `tpm.sys`. As a result the event-count field in the Windows WBCL
+does not change, and a verifier that checks the WBCL event count will not see
+the revoke. PCR[12] does change and is visible through TBS.
+
+`Tbsi_Create_Windows_Key` (TBS IOCTL `0x22C19C`) is the SRK-creation path
+Windows uses during provisioning. SoftTPM accepts the SRK (`0x81000001`) and
+EK (`0x81010001`) handles and runs the idempotent provisioning pass, which
+creates or leaves the SRK/EK in place. It does not persist a separate key at
+any other handle; those are rejected.
+
 Validated behavior on a live Windows 11 system: the scheduled
 `Tpm-Maintenance` task reads the certificate from NV and installs it into the
 Windows `EKCertStore` (the `RTCCertificate`/`EKCertStore` keys under
 `HKLM\SYSTEM\CurrentControlSet\Services\TPM\WMI` report it), after which
 Windows reports `EkCertificatePresent = 1` and owns the TPM. The maintenance
 task completes with result 0.
+
+On the same system, `Tbsi_Create_Windows_Key` returns 0 for both the SRK
+(`0x81000001`) and EK (`0x81010001`) handles, and `Tbsi_Revoke_Attestation`
+returns 0. The first NV counter update after boot can return
+`TPM_RC_RETRY` (`0x922`) before the DA-used state is committed; the service
+retries that command transparently. The private locality IOCTL was verified
+with `TPM2_PCR_Reset` on PCR 20: locality 0 is rejected with
+`TPM_RC_LOCALITY` (`0x907`) and locality 2 succeeds. Normal TBS traffic is
+still restricted to locality 0.
 
 ## Platform log (WBCL)
 
@@ -119,8 +149,9 @@ TPM in ways that matter:
   Treat sealed secrets as protected against other users and casual disk
   access, not against a compromised OS.
 - **Cloning/rollback.** The state can be copied as a snapshot and restored
-  later; there is no monotonic counter that an external party checks. A
-  restored snapshot can roll the TPM back in time.
+  later. The SoftTPM attestation counter is monotonic only inside that state
+  and is not reported in the WBCL; no external party checks it. A restored
+  snapshot can still roll the TPM back in time.
 - **Physical presence is simulated.** Provisioning toggles
   `_plat__Signal_PhysicalPresenceOn/Off` internally, and the PPI responder
   answers synthetic values. No real human confirmation exists, and PP-based
@@ -146,9 +177,13 @@ flow.
 
 ## Known limitations
 
-- **Locality 0 only.** The TBS submit interface carries no locality, and the
-  driver sets `Locality = 0` for every command. Policies that require a
-  non-zero locality cannot be satisfied.
+- **Locality through TBS is 0.** `Tbsip_Submit_Command` accepts a locality,
+  but `tbs.dll` rejects non-zero values before building the IOCTL, and the
+  IOCTL input has no locality field. Normal traffic therefore executes at
+  locality 0. A SoftTPM-private test IOCTL (`0x22C1A4`) can submit a command
+  at localities 0-4, but Windows TBS and the standard `Tbsi_*` APIs cannot
+  reach it. Policies that require a non-zero locality through TBS cannot be
+  satisfied.
 - **One command outstanding.** The driver delivers commands strictly one at
   a time; the queue depth is 64. Very bursty command sources see
   serialization, and a stuck command blocks others until the 30-second
@@ -173,8 +208,10 @@ flow.
 - **Startup is always CLEAR.** No `Startup(STATE)` continuity across service
   restarts; a restart re-initializes volatile state (loaded keys/sessions
   are lost, NV data is not).
-- **No locality, no PP attestation, no hardware RNG.** Entropy comes from
-  the OS CNG random source.
+- **No hardware RNG.** Entropy comes from the OS CNG random source.
+- **No WBCL event-count revocation.** The revoke path updates SoftTPM's own
+  counter, not the counter tracked by `tpm.sys`; the WBCL event count is
+  unchanged.
 - **The published platform log has no measurements by default.** The
   spec-ID-only WBCL satisfies Windows' "a TCG log exists" checks. A captured
   platform log is replayed at startup, but that is a replay, not evidence

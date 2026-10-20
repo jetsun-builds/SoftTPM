@@ -54,7 +54,10 @@ VOID SoftTpmServiceLinkFlush(PSOFTTPM_GLOBAL_STATE State)
 
     if (current != NULL)
     {
-        SoftTpmCompleteTbsFailure(current->TbsRequest);
+        SoftTpmCompleteRequestFailure(
+            current->TbsRequest,
+            current->Action,
+            STATUS_DEVICE_NOT_READY);
         ExFreePoolWithTag(current, SOFTTPM_POOL_TAG);
     }
 
@@ -66,7 +69,10 @@ VOID SoftTpmServiceLinkFlush(PSOFTTPM_GLOBAL_STATE State)
             ListEntry);
 
         RemoveEntryList(&entry->ListEntry);
-        SoftTpmCompleteTbsFailure(entry->TbsRequest);
+        SoftTpmCompleteRequestFailure(
+            entry->TbsRequest,
+            entry->Action,
+            STATUS_DEVICE_NOT_READY);
         ExFreePoolWithTag(entry, SOFTTPM_POOL_TAG);
     }
 }
@@ -166,7 +172,10 @@ VOID SoftTpmEvtTimeoutTimer(WDFTIMER Timer)
         current->RequestLength,
         0,
         (ULONG)STATUS_IO_TIMEOUT);
-    SoftTpmCompleteTbsFailure(current->TbsRequest);
+    SoftTpmCompleteRequestFailure(
+        current->TbsRequest,
+        current->Action,
+        STATUS_IO_TIMEOUT);
     ExFreePoolWithTag(current, SOFTTPM_POOL_TAG);
 
     SoftTpmServiceLinkTryDeliver(state);

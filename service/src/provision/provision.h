@@ -3,4 +3,6 @@
 
 int provision_run(const wchar_t* StateDirectory);
 
+int provision_revoke_attestation(void);
+
 #endif

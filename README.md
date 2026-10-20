@@ -70,6 +70,10 @@ SoftTPM is built and validated on Windows 11 x64 with the test-signed driver:
   (38 measurement events plus the spec ID event): after a reboot the WBCL is
   byte-identical to `platform-log.bin`, and `tpmtool gatherlogs` completes
   without object-context errors.
+- The TBS action probes return 0: `Tbsi_Create_Windows_Key` for the SRK and
+  EK handles and `Tbsi_Revoke_Attestation`. The private locality IOCTL rejects
+  a PCR 20 reset at locality 0 with `TPM_RC_LOCALITY` and accepts it at
+  locality 2.
 
 ## Feature support
 
@@ -88,8 +92,8 @@ SoftTPM is built and validated on Windows 11 x64 with the test-signed driver:
 | BitLocker automatic pre-boot unlock | Not supported: the UEFI boot path cannot reach a software TPM |
 | `Ready For Attestation` / remote attestation | The TCG log requirement is met by the published WBCL; remote attestation still fails because the EK chain is not Microsoft-trusted |
 | Firmware measurement PCRs / measured boot | A captured platform log is replayed into all three PCR banks, but the values are produced by the service at startup, not by the firmware |
-| Attestation-only IOCTLs (`Tbsi_Create_Windows_Key`, revoke flows) | Not implemented |
-| Locality != 0 policies, physical-presence flows, field upgrade | Not supported |
+| Attestation IOCTLs (`Tbsi_Create_Windows_Key`, `Tbsi_Revoke_Attestation`) | Implemented (create maps to SRK/EK provisioning; revoke updates PCR[12] and SoftTPM's NV counter; WBCL event count is unchanged) |
+| Locality != 0 through TBS, physical-presence persistence, field upgrade | TBS locality remains 0; a private test IOCTL supports localities 0-4. PPI pending state persists across driver reloads but is not applied pre-OS. Field upgrade remains unsupported. |
 
 The full list of limitations is in
 [docs/attestation-and-limits.md](docs/attestation-and-limits.md).

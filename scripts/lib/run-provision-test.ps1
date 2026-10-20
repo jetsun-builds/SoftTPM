@@ -9,7 +9,9 @@ param(
     [switch]$SkipCdb,
     [switch]$ConsoleDebug,
     [switch]$ReinstallDriver,
-    [switch]$AttestationTest
+    [switch]$AttestationTest,
+    [switch]$ActionTest,
+    [switch]$LocalityTest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -569,13 +571,154 @@ if ($AttestationTest)
     }
 }
 
+if ($ActionTest)
+{
+    Invoke-Step 'attestation-actions' {
+        if (-not ('SoftTpmTbsActions' -as [type]))
+        {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class SoftTpmTbsActions
+{
+    [DllImport("tbs.dll", CallingConvention = CallingConvention.Winapi)]
+    public static extern uint Tbsi_Create_Windows_Key(uint keyHandle);
+
+    [DllImport("tbs.dll", CallingConvention = CallingConvention.Winapi)]
+    public static extern uint Tbsi_Revoke_Attestation();
+}
+'@
+        }
+
+        foreach ($handle in @([uint32]2164260865, [uint32]2164326401))
+        {
+            $rc = [SoftTpmTbsActions]::Tbsi_Create_Windows_Key($handle)
+            'Tbsi_Create_Windows_Key(0x{0:X8}) = 0x{1:X8}' -f $handle, $rc
+            if ($rc -ne 0)
+            {
+                throw ('Tbsi_Create_Windows_Key(0x{0:X8}) failed: 0x{1:X8}' -f $handle, $rc)
+            }
+        }
+
+        $rc = [SoftTpmTbsActions]::Tbsi_Revoke_Attestation()
+        'Tbsi_Revoke_Attestation() = 0x{0:X8}' -f $rc
+        if ($rc -ne 0)
+        {
+            throw ('Tbsi_Revoke_Attestation failed: 0x{0:X8}' -f $rc)
+        }
+    }
+}
+
+if ($LocalityTest)
+{
+    Invoke-Step 'locality-test' {
+        if (-not ('SoftTpmLocalityProbe' -as [type]))
+        {
+            Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class SoftTpmLocalityProbe
+{
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateFileW(
+        string name, uint access, uint share, IntPtr security,
+        uint creation, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(
+        IntPtr device, uint code, byte[] input, uint inputSize,
+        byte[] output, uint outputSize, out uint returned, IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static byte[] Submit(uint locality, byte[] command)
+    {
+        IntPtr device = CreateFileW(@"\\.\TPM", 0xC0000000, 3, IntPtr.Zero, 3, 0x80, IntPtr.Zero);
+        if (device == (IntPtr)(-1))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        try
+        {
+            byte[] input = new byte[8 + command.Length];
+            BitConverter.GetBytes(locality).CopyTo(input, 0);
+            BitConverter.GetBytes(200u).CopyTo(input, 4);
+            command.CopyTo(input, 8);
+
+            byte[] output = new byte[4096];
+            uint returned;
+            if (!DeviceIoControl(device, 0x22C1A4, input, (uint)input.Length,
+                output, (uint)output.Length, out returned, IntPtr.Zero))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+
+            int responseSize = (int)returned;
+            byte[] response = new byte[responseSize];
+            Array.Copy(output, response, responseSize);
+            return response;
+        }
+        finally
+        {
+            CloseHandle(device);
+        }
+    }
+}
+'@
+        }
+
+        function Get-TpmResponseCode([byte[]]$Response)
+        {
+            if ($Response.Length -lt 10)
+            {
+                throw ('short TPM response ({0} bytes)' -f $Response.Length)
+            }
+
+            [uint32]$code = 0
+            for ($index = 6; $index -le 9; $index++)
+            {
+                $code = ($code -shl 8) -bor $Response[$index]
+            }
+
+            return $code
+        }
+
+        # TPM2_PCR_Reset(PCR[20]). PCR 20 is resettable at localities 2 and 4,
+        # not at locality 0. This proves the private IOCTL carries locality.
+        $resetPcr20 = [byte[]](0x80, 0x02, 0x00, 0x00, 0x00, 0x1B, 0x00, 0x00, 0x01, 0x3D, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x09, 0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00)
+
+        $response = [SoftTpmLocalityProbe]::Submit(0, $resetPcr20)
+        $code = Get-TpmResponseCode $response
+        'PCR_Reset(PCR[20]) at locality 0 = 0x{0:X8}' -f $code
+        if ($code -ne 0x00000907)
+        {
+            throw ('locality 0 should be rejected with TPM_RC_LOCALITY, got 0x{0:X8}' -f $code)
+        }
+
+        $response = [SoftTpmLocalityProbe]::Submit(2, $resetPcr20)
+        $code = Get-TpmResponseCode $response
+        'PCR_Reset(PCR[20]) at locality 2 = 0x{0:X8}' -f $code
+        if ($code -ne 0)
+        {
+            throw ('locality 2 should allow PCR_Reset(PCR[20]), got 0x{0:X8}' -f $code)
+        }
+    }
+}
+
 Invoke-Step 'collect-final' {
     Copy-Item $ServiceLog (Join-Path $LogDirectory 'softtpm-service-full.log') -Force
     'full service log copied after all probes'
 }
 
 Write-Step 'done'
-"Step logs written to $LogDirectory (build-full.log, install-service.log, collect.log, diagnose.log, get-tpm.log, ek-cert-info.log, cdb.log, console-debug.log)"
+"Step logs written to $LogDirectory (build-full.log, install-service.log, collect.log, diagnose.log, get-tpm.log, ek-cert-info.log, cdb.log, console-debug.log, attestation-actions.log, locality-test.log)"
 "Service log copied to $LogDirectory\softtpm-service.log (first 8s) and softtpm-service-full.log (complete)"
 "console-debug is opt-in: rerun with -ConsoleDebug for cdb deep-dive"
 "attestation-test is opt-in: rerun with -AttestationTest to experiment with TPM attestation readiness"
+"attestation-actions is opt-in: rerun with -ActionTest to exercise Tbsi_Create_Windows_Key and Tbsi_Revoke_Attestation"
+"locality-test is opt-in: rerun with -LocalityTest to verify the private locality IOCTL"

@@ -332,6 +332,24 @@ uint32_t tpm_build_nv_write(
     return writer.Overflow ? 0 : writer.Offset;
 }
 
+uint32_t tpm_build_nv_increment(
+    uint32_t AuthHandle,
+    uint32_t NvIndex,
+    uint8_t* Buffer,
+    uint32_t BufferSize)
+{
+    TPM_WRITER writer;
+
+    WriterInit(&writer, Buffer, BufferSize);
+    WriterCommandHeader(&writer, SOFTTPM_TPM_ST_SESSIONS, SOFTTPM_TPM_NV_INCREMENT);
+    WriterU32(&writer, AuthHandle);
+    WriterU32(&writer, NvIndex);
+    WriterPasswordAuthArea(&writer);
+    WriterCompleteHeader(&writer);
+
+    return writer.Overflow ? 0 : writer.Offset;
+}
+
 uint32_t tpm_build_rsa_public_area(
     uint32_t ObjectAttributes,
     const uint8_t* AuthPolicy,

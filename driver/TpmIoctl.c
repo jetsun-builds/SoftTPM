@@ -61,19 +61,25 @@ static VOID SoftTpmTpmCompleteDword(WDFREQUEST Request, ULONG Value)
         sizeof(ULONG));
 }
 
-static VOID SoftTpmTpmSubmitCommand(PSOFTTPM_GLOBAL_STATE State, WDFREQUEST Request)
+static BOOLEAN SoftTpmTpmServiceConnected(PSOFTTPM_GLOBAL_STATE State)
 {
-    PVOID inputBuffer = NULL;
-    size_t inputLength = 0;
-    ULONG priority;
     BOOLEAN connected;
-    NTSTATUS status;
 
     WdfWaitLockAcquire(State->Lock, NULL);
     connected = State->ServiceConnected;
     WdfWaitLockRelease(State->Lock);
 
-    if (!connected)
+    return connected;
+}
+
+static VOID SoftTpmTpmSubmitCommand(PSOFTTPM_GLOBAL_STATE State, WDFREQUEST Request)
+{
+    PVOID inputBuffer = NULL;
+    size_t inputLength = 0;
+    ULONG priority;
+    NTSTATUS status;
+
+    if (!SoftTpmTpmServiceConnected(State))
     {
         WdfRequestComplete(Request, STATUS_DEVICE_NOT_READY);
         return;
@@ -102,9 +108,133 @@ static VOID SoftTpmTpmSubmitCommand(PSOFTTPM_GLOBAL_STATE State, WDFREQUEST Requ
     SoftTpmServiceLinkEnqueueCommand(
         State,
         Request,
+        SOFTTPM_ACTION_SUBMIT,
+        0,
         (PUCHAR)inputBuffer,
         (ULONG)inputLength,
         priority);
+}
+
+static VOID SoftTpmTpmSubmitCommandLocality(
+    PSOFTTPM_GLOBAL_STATE State,
+    WDFREQUEST Request)
+{
+    PVOID inputBuffer = NULL;
+    size_t inputLength = 0;
+    size_t headerSize;
+    ULONG locality;
+    ULONG priority;
+    PUCHAR command;
+    size_t commandLength;
+    NTSTATUS status;
+
+    headerSize = FIELD_OFFSET(SOFTTPM_TPM_LOCALITY_INPUT, Command);
+
+    if (!SoftTpmTpmServiceConnected(State))
+    {
+        WdfRequestComplete(Request, STATUS_DEVICE_NOT_READY);
+        return;
+    }
+
+    status = WdfRequestRetrieveInputBuffer(
+        Request,
+        headerSize,
+        &inputBuffer,
+        &inputLength);
+
+    if (!NT_SUCCESS(status) || inputLength < headerSize)
+    {
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    RtlCopyMemory(&locality, inputBuffer, sizeof(locality));
+    RtlCopyMemory(&priority, (PUCHAR)inputBuffer + sizeof(ULONG), sizeof(priority));
+
+    command = (PUCHAR)inputBuffer + headerSize;
+    commandLength = inputLength - headerSize;
+
+    if (locality > SOFTTPM_MAX_LOCALITY
+        || commandLength < SOFTTPM_TPM_COMMAND_HEADER_SIZE
+        || commandLength > SOFTTPM_MAX_PACKET_SIZE)
+    {
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    SoftTpmServiceLinkEnqueueCommand(
+        State,
+        Request,
+        SOFTTPM_ACTION_SUBMIT,
+        locality,
+        command,
+        (ULONG)commandLength,
+        priority);
+}
+
+static VOID SoftTpmTpmCreateWindowsKey(
+    PSOFTTPM_GLOBAL_STATE State,
+    WDFREQUEST Request)
+{
+    PVOID inputBuffer = NULL;
+    size_t inputLength = 0;
+    ULONG keyHandle;
+    NTSTATUS status;
+
+    if (!SoftTpmTpmServiceConnected(State))
+    {
+        WdfRequestComplete(Request, STATUS_DEVICE_NOT_READY);
+        return;
+    }
+
+    status = WdfRequestRetrieveInputBuffer(
+        Request,
+        sizeof(ULONG),
+        &inputBuffer,
+        &inputLength);
+
+    if (!NT_SUCCESS(status) || inputLength < sizeof(ULONG))
+    {
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    RtlCopyMemory(&keyHandle, inputBuffer, sizeof(keyHandle));
+
+    if (keyHandle != 0x81000001 && keyHandle != 0x81010001)
+    {
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    SoftTpmServiceLinkEnqueueCommand(
+        State,
+        Request,
+        SOFTTPM_ACTION_CREATE_WINDOWS_KEY,
+        0,
+        NULL,
+        0,
+        0xC8);
+}
+
+static VOID SoftTpmTpmRevokeAttestation(
+    PSOFTTPM_GLOBAL_STATE State,
+    WDFREQUEST Request)
+{
+    if (!SoftTpmTpmServiceConnected(State))
+    {
+        WdfRequestComplete(Request, STATUS_DEVICE_NOT_READY);
+        return;
+    }
+
+    SoftTpmServiceLinkEnqueueCommand(
+        State,
+        Request,
+        SOFTTPM_ACTION_REVOKE_ATTESTATION,
+        0,
+        NULL,
+        0,
+        0xC8);
 }
 
 VOID SoftTpmEvtTpmIoControl(
@@ -130,6 +260,18 @@ VOID SoftTpmEvtTpmIoControl(
     case SOFTTPM_IOCTL_TPM_SUBMIT_COMMAND_NONBLOCKING:
         /* tpm.sys routes both codes to the same submit handler. */
         SoftTpmTpmSubmitCommand(state, Request);
+        return;
+
+    case SOFTTPM_IOCTL_TPM_SUBMIT_COMMAND_LOCALITY:
+        SoftTpmTpmSubmitCommandLocality(state, Request);
+        return;
+
+    case SOFTTPM_IOCTL_TPM_CREATE_WINDOWS_KEY:
+        SoftTpmTpmCreateWindowsKey(state, Request);
+        return;
+
+    case SOFTTPM_IOCTL_TPM_REVOKE_ATTESTATION:
+        SoftTpmTpmRevokeAttestation(state, Request);
         return;
 
     case SOFTTPM_IOCTL_TPM_PPI_COMMAND:

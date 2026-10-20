@@ -43,6 +43,13 @@ The harness performs these steps:
    the console debugger path (`-ConsoleDebug`).
 7. Optionally runs attestation probes (`-AttestationTest`): trusts the local
    EK CA, runs `Tpm-Maintenance`, and creates a TPM-backed certificate.
+8. Optionally exercises the attestation actions (`-ActionTest`):
+   `Tbsi_Create_Windows_Key` for the SRK and EK handles, then
+   `Tbsi_Revoke_Attestation`. This calls `tbs.dll` directly and fails the step
+   on a non-zero TBS result.
+9. Optionally verifies the private locality IOCTL (`-LocalityTest`):
+   `TPM2_PCR_Reset` on PCR 20 at locality 0 must return `TPM_RC_LOCALITY`,
+   and the same command at locality 2 must succeed. This resets PCR 20.
 
 Useful switches:
 
@@ -54,11 +61,16 @@ Useful switches:
 | `-SkipCdb` | Do not inspect crash dumps |
 | `-ConsoleDebug` | Run the service under `cdb` in console mode |
 | `-AttestationTest` | Run the EK/attestation probes |
+| `-ActionTest` | Exercise `Tbsi_Create_Windows_Key` and `Tbsi_Revoke_Attestation` |
+| `-LocalityTest` | Verify locality handling with `TPM2_PCR_Reset` on PCR 20 |
 | `-OpenSslRoot <path>` | Override the OpenSSL root for the build |
 
 The driver cannot be replaced while its previous image is loaded. When that
 happens, `install.ps1` stages the new file for the next boot and the harness
-warns that it is testing the previous build. Reboot and rerun.
+warns that it is testing the previous build. Reboot and rerun. A loaded driver
+can also survive a reinstall without a pending rename; if the service log says
+`invalid GET_COMMAND payload` with `version 1`, the previous protocol is still
+active and the VM must be rebooted before testing.
 
 ## Status
 
@@ -166,3 +178,9 @@ On the validated Windows 11 x64 setup:
 - `tpmtool gatherlogs` exits 0; the `MAX_LOADED_OBJECTS = 8` profile avoids
   `TPM_RC_OBJECT_MEMORY` (`0x80280902`).
 - `-Mode Validate` passes all checks.
+- `Tbsi_Create_Windows_Key(0x81000001)` and `Tbsi_Create_Windows_Key(0x81010001)`
+  return 0; `Tbsi_Revoke_Attestation` also returns 0. The first NV counter
+  update after boot can log one internal `TPM_RC_RETRY` (`0x922`) and is
+  retried.
+- The private locality IOCTL returns `TPM_RC_LOCALITY` (`0x907`) for
+  `TPM2_PCR_Reset` on PCR 20 at locality 0 and 0 at locality 2.

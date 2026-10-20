@@ -2,6 +2,7 @@
 #include "ServiceLink.h"
 #include "TpmControlDevice.h"
 #include "TpmIoctl.h"
+#include "TpmPpi.h"
 
 static SOFTTPM_GLOBAL_STATE g_SoftTpmState;
 static WCHAR g_debugKeyBuffer[256];
@@ -53,6 +54,109 @@ VOID SoftTpmDebugRecord(PCSTR Name, ULONG Value)
         ZwSetValueKey(key, &valueName, 0, REG_DWORD, &Value, sizeof(Value));
         ZwClose(key);
     }
+}
+
+NTSTATUS SoftTpmRegistryReadDword(PCWSTR ValueName, PULONG Value)
+{
+    UNICODE_STRING valueName;
+    OBJECT_ATTRIBUTES attributes;
+    HANDLE key = NULL;
+    __declspec(align(8)) UCHAR buffer[
+        FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + sizeof(ULONG)];
+    PKEY_VALUE_PARTIAL_INFORMATION information;
+    ULONG resultLength = 0;
+    NTSTATUS status;
+
+    if (ValueName == NULL || Value == NULL || g_debugKeyPath.Buffer == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    RtlInitUnicodeString(&valueName, ValueName);
+    InitializeObjectAttributes(
+        &attributes,
+        &g_debugKeyPath,
+        OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+        NULL,
+        NULL);
+
+    status = ZwOpenKey(&key, KEY_QUERY_VALUE, &attributes);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    status = ZwQueryValueKey(
+        key,
+        &valueName,
+        KeyValuePartialInformation,
+        buffer,
+        (ULONG)sizeof(buffer),
+        &resultLength);
+
+    if (NT_SUCCESS(status))
+    {
+        information = (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
+
+        if (information->Type == REG_DWORD
+            && information->DataLength == sizeof(ULONG))
+        {
+            RtlCopyMemory(Value, information->Data, sizeof(ULONG));
+        }
+        else
+        {
+            status = STATUS_OBJECT_TYPE_MISMATCH;
+        }
+    }
+
+    ZwClose(key);
+    return status;
+}
+
+NTSTATUS SoftTpmRegistryWriteDword(PCWSTR ValueName, ULONG Value)
+{
+    UNICODE_STRING valueName;
+    OBJECT_ATTRIBUTES attributes;
+    HANDLE key = NULL;
+    NTSTATUS status;
+
+    if (ValueName == NULL || g_debugKeyPath.Buffer == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    RtlInitUnicodeString(&valueName, ValueName);
+    InitializeObjectAttributes(
+        &attributes,
+        &g_debugKeyPath,
+        OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+        NULL,
+        NULL);
+
+    status = ZwOpenKey(&key, KEY_SET_VALUE, &attributes);
+    if (NT_SUCCESS(status))
+    {
+        status = ZwSetValueKey(
+            key,
+            &valueName,
+            0,
+            REG_DWORD,
+            &Value,
+            (ULONG)sizeof(Value));
+        ZwClose(key);
+    }
+
+    return status;
 }
 
 VOID SoftTpmErrorRecord(ULONG Step, NTSTATUS Status)
@@ -110,6 +214,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 
     SoftTpmErrorRecord(1, STATUS_SUCCESS);
     SoftTpmDebugRecord("DbgEntry", 1);
+    SoftTpmPpiInitialize();
 
     WDF_DRIVER_CONFIG_INIT(&config, SoftTpmEvtDeviceAdd);
     config.EvtDriverUnload = SoftTpmEvtDriverUnload;
