@@ -25,7 +25,12 @@ try {
     $sdk = '10.0.26100.0'
     $null = Require-Path (Join-Path $kits "Include/$sdk/km/wdm.h")
     $signtool = Require-Path (Join-Path $kits "bin/$sdk/x64/signtool.exe")
-    $inf2cat = Require-Path (Join-Path $kits 'bin/x86/Inf2Cat.exe')
+    $kitsBin = Require-Path (Join-Path $kits 'bin')
+    $inf2catFile = Get-ChildItem -LiteralPath $kitsBin -Recurse -Filter 'Inf2Cat.exe' -File |
+        Sort-Object @{ Expression = { $_.FullName -like "*$sdk*" }; Descending = $true }, FullName |
+        Select-Object -First 1
+    if (-not $inf2catFile) { throw 'Inf2Cat.exe not found under installed Windows Kits bin directory' }
+    $inf2cat = Require-Path $inf2catFile.FullName
 
     $opensslCommand = Get-Command openssl.exe -ErrorAction SilentlyContinue
     $candidates = @('C:/Program Files/OpenSSL', 'C:/Program Files/OpenSSL-Win64', 'C:/OpenSSL-Win64', 'C:/OpenSSL')
