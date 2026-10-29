@@ -1,0 +1,54 @@
+name: Build Windows 11 x64 test package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-windows.yml'
+      - 'scripts/ci/**'
+      - 'driver/**'
+      - 'service/**'
+      - 'shared/**'
+      - 'tools/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Checkout SoftTPM
+        uses: actions/checkout@v4
+        with:
+          path: softtpm
+          persist-credentials: false
+      - name: Checkout pinned Microsoft TPM engine
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/ms-tpm-20-ref
+          ref: ee21db0a941decd3cac67925ea3310873af60ab3
+          path: ms-tpm-20-ref
+          persist-credentials: false
+      - name: Build, test-sign and verify package
+        run: ./softtpm/scripts/ci/build-package.ps1
+      - name: Upload Windows 11 x64 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: SoftTPM-Windows11-x64-TestSigned
+          path: softtpm/dist/SoftTPM-Windows11-x64-TestSigned/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: softtpm/dist/*.log
+          if-no-files-found: ignore
+          retention-days: 14
